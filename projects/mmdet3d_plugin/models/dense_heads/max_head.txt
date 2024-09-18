@@ -1,0 +1,147 @@
+def _loss_single_task(self,
+                          pred_bboxes,
+                          pred_logits,
+                          pred_ious,
+                          labels_list,
+                          labels_weights_list,
+                          bbox_targets_list,
+                          bbox_weights_list,
+                          num_total_pos,
+                          num_total_neg):
+        """"Compute loss for single task.
+        Outputs from a single decoder layer of a single feature level are used.
+        Args:
+            pred_bboxes (Tensor): (batch_size, num_query, 10)
+            pred_logits (Tensor): (batch_size, num_query, task_classes)
+            labels_list (list[Tensor]): batch_size x (num_query, )
+            labels_weights_list (list[Tensor]): batch_size x (num_query, )
+            bbox_targets_list(list[Tensor]): batch_size x (num_query, 9)
+            bbox_weights_list(list[Tensor]): batch_size x (num_query, 10)
+            num_total_pos: int
+            num_total_neg: int
+        Returns:
+            loss_cls
+            loss_bbox
+        """
+        
+        labels = torch.cat(labels_list, dim=0)
+        labels_weights = torch.cat(labels_weights_list, dim=0)
+        bbox_targets = torch.cat(bbox_targets_list, dim=0)
+        bbox_weights = torch.cat(bbox_weights_list, dim=0)
+
+        pred_bboxes_flatten = pred_bboxes.flatten(0, 1)
+        pred_logits_flatten = pred_logits.flatten(0, 1)
+        pred_ious_flatten = pred_ious.flatten(0,1)
+        
+        cls_avg_factor = num_total_pos * 1.0 + num_total_neg * 0.1
+        cls_avg_factor = max(cls_avg_factor, 1)
+        loss_cls = self.loss_cls(
+            pred_logits_flatten, labels, labels_weights, avg_factor=cls_avg_factor
+        )
+
+        normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range)
+        isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
+        bbox_weights = bbox_weights * bbox_weights.new_tensor(self.train_cfg.code_weights)[None, :]
+        #import pdb; pdb.set_trace()
+        loss_bbox = self.loss_bbox(
+            pred_bboxes_flatten[isnotnan, :10],
+            normalized_bbox_targets[isnotnan, :10],
+            bbox_weights[isnotnan, :10],
+            avg_factor=num_total_pos
+        )
+
+        loss_cls = torch.nan_to_num(loss_cls)
+        loss_bbox = torch.nan_to_num(loss_bbox)
+        
+        max_query = 500
+        valid_indices = torch.nonzero(isnotnan, as_tuple=False).squeeze()
+        limited_indices = valid_indices[:max_query]
+        
+        if self.with_iou:
+            denormal_pred = denormalize_bbox(pred_bboxes_flatten, self.pc_range)
+            pred_bboxes_flatten_for_iou = denormal_pred[limited_indices, :10].detach()
+            iou_loss = self.crit_iou(pred_ious_flatten[limited_indices],pred_bboxes_flatten_for_iou,bbox_targets[limited_indices,:10], num_total_pos)
+        
+
+        iou_loss = torch.nan_to_num(iou_loss)
+        
+        if self.with_iou :
+            loss_cls = torch.tensor(0.0).to(pred_bboxes.device)
+            loss_bbox = torch.tensor(0.0).to(pred_bboxes.device)
+        else : 
+            iou_loss = torch.tensor(0.0).to(pred_bboxes.device)
+        return loss_cls, loss_bbox , iou_loss 
+
+def _dn_loss_single_task(self,
+                             pred_bboxes,
+                             pred_logits,
+                             pred_ious,
+                             mask_dict):
+        known_labels, known_bboxs = mask_dict['known_lbs_bboxes']
+        map_known_indice = mask_dict['map_known_indice'].long()
+        known_indice = mask_dict['known_indice'].long()
+        batch_idx = mask_dict['batch_idx'].long()
+        bid = batch_idx[known_indice]
+        known_labels_raw = mask_dict['known_labels_raw']
+
+        pred_logits = pred_logits[(bid, map_known_indice)]
+        pred_bboxes = pred_bboxes[(bid, map_known_indice)]
+        pred_ious = pred_ious[(bid, map_known_indice)]
+        #import pdb; pdb.set_trace()
+        num_tgt = known_indice.numel()
+
+        # filter task bbox
+        task_mask = known_labels_raw != pred_logits.shape[-1]
+        task_mask_sum = task_mask.sum()
+
+        if task_mask_sum > 0:
+            pred_bboxes = pred_bboxes[task_mask]
+            known_bboxs = known_bboxs[task_mask]
+
+        # classification loss
+        # construct weighted avg_factor to match with the official DETR repo
+        cls_avg_factor = num_tgt * 3.14159 / 6 * self.split * self.split * self.split
+
+        label_weights = torch.ones_like(known_labels)
+        cls_avg_factor = max(cls_avg_factor, 1)
+        loss_cls = self.loss_cls(
+            pred_logits, known_labels.long(), label_weights, avg_factor=cls_avg_factor)
+
+        # Compute the average number of gt boxes accross all gpus, for
+        # normalization purposes
+        num_tgt = loss_cls.new_tensor([num_tgt])
+        num_tgt = torch.clamp(reduce_mean(num_tgt), min=1).item()
+
+        # regression L1 loss
+        normalized_bbox_targets = normalize_bbox(known_bboxs, self.pc_range)
+        isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
+        bbox_weights = torch.ones_like(pred_bboxes)
+        bbox_weights = bbox_weights * bbox_weights.new_tensor(self.train_cfg.code_weights)[None, :]
+        loss_bbox = self.loss_bbox(
+            pred_bboxes[isnotnan, :10], normalized_bbox_targets[isnotnan, :10], bbox_weights[isnotnan, :10],
+            avg_factor=num_tgt)
+
+        loss_cls = torch.nan_to_num(loss_cls)
+        loss_bbox = torch.nan_to_num(loss_bbox)
+
+        if task_mask_sum == 0:
+            loss_bbox = loss_bbox * 0.0
+
+        max_query = 500
+        valid_indices = torch.nonzero(isnotnan, as_tuple=False).squeeze()
+        limited_indices = valid_indices[:max_query]  
+        
+        if self.with_iou:
+            denormal_pred = denormalize_bbox(pred_bboxes, self.pc_range)
+            pred_bboxes_flatten_for_iou = denormal_pred[limited_indices,:10].detach()
+            iou_loss = self.crit_iou(pred_ious[limited_indices], pred_bboxes_flatten_for_iou, known_bboxs[limited_indices,:10],num_tgt)
+        #import pdb; pdb.set_trace()
+       
+        
+        if self.with_iou:
+            loss_cls = torch.tensor(0.0).to(pred_bboxes.device)
+            loss_bbox = torch.tensor(0.0).to(pred_bboxes.device)
+        else:
+            iou_loss = torch.tensor(0.0).to(pred_bboxes.device)
+        
+        return self.dn_weight * loss_cls, self.dn_weight * loss_bbox, self.dn_weight * iou_loss
