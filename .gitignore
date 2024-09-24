@@ -141,4 +141,3 @@ mmdet3d/core/evaluation/waymo_utils/compute_detection_metrics_main
 
 .DS_Store
 Mud_Mask_selected
-core
