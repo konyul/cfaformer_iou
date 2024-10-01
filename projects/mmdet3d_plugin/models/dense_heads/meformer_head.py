@@ -1392,7 +1392,6 @@ class MEFormerHead(BaseModule):
     def _loss_single_task(self,
                           pred_bboxes,
                           pred_logits,
-                          pred_ious,
                           labels_list,
                           labels_weights_list,
                           bbox_targets_list,
@@ -1421,7 +1420,6 @@ class MEFormerHead(BaseModule):
 
         pred_bboxes_flatten = pred_bboxes.flatten(0, 1)
         pred_logits_flatten = pred_logits.flatten(0, 1)
-        pred_ious_flatten = pred_ious.flatten(0,1)
 
         cls_avg_factor = num_total_pos * 1.0 + num_total_neg * 0.1
         cls_avg_factor = max(cls_avg_factor, 1)
@@ -1472,7 +1470,6 @@ class MEFormerHead(BaseModule):
         for idx in range(batch_size):
             pred_bboxes_list.append([task_pred_bbox[idx] for task_pred_bbox in pred_bboxes])
             pred_logits_list.append([task_pred_logits[idx] for task_pred_logits in pred_logits])
-            pred_ious_list.append([task_pred_iou[idx] for task_pred_iou in pred_ious])
         cls_reg_targets = self.get_targets(
             gt_bboxes_3d, gt_labels_3d, pred_bboxes_list, pred_logits_list
         )
@@ -1482,7 +1479,6 @@ class MEFormerHead(BaseModule):
             self._loss_single_task,
             pred_bboxes,
             pred_logits,
-            pred_ious,
             labels_list,
             label_weights_list,
             bbox_targets_list,
@@ -1608,11 +1604,7 @@ class MEFormerHead(BaseModule):
                                  preds_dict[0]['dim'][i][dec_id], preds_dict[0]['rot'][i][dec_id]]
                     if 'vel' in preds_dict[0]:
                         pred_bbox.append(preds_dict[0]['vel'][i][dec_id])
-                    if 'iou' in preds_dict[0]:
-                        pred_iou = preds_dict[0]['iou'][i][dec_id]
                     pred_bbox = torch.cat(pred_bbox, dim=-1)
-
-                    all_pred_ious[dec_id].append(pred_iou)
                     all_pred_bboxes[dec_id].append(pred_bbox)
                     all_pred_logits[dec_id].append(preds_dict[0]['cls_logits'][i][dec_id])
             all_pred_bboxes = [all_pred_bboxes[idx] for idx in range(num_decoder)]
