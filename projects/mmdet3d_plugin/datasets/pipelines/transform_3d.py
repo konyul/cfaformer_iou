@@ -840,6 +840,7 @@ class ModalMask3D(object):
         self.mask_modal = mask_modal
 
     def __call__(self, input_dict):
+        input_dict['modalmask'] = [1,0,0] # clean lidar drop camera drop
         if self.mode == 'test':
             if self.mask_modal == 'image':
                 input_dict['img'] = [0. * item for item in input_dict['img']]
@@ -849,9 +850,10 @@ class ModalMask3D(object):
             seed = np.random.rand()
             if seed > 0.75:
                 input_dict['img'] = [0. * item for item in input_dict['img']]
+                input_dict['modalmask'] = [0,1,0]
             elif seed > 0.5:
                 input_dict['points'].tensor = input_dict['points'].tensor * 0.0
-
+                input_dict['modalmask'] = [0,0,1]
         return input_dict
 
     def __repr__(self):

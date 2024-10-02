@@ -11,6 +11,7 @@ import copy
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.init import normal_
 from einops import rearrange
 from mmcv.cnn import xavier_init
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
@@ -35,7 +36,9 @@ class CFATransformer(BaseModule):
             num_classes=None,
             numq_per_modal=100,
             query_modal_types=['fused', 'bev', 'img'],
-            cross=False
+            cross=False,
+            modal_embedding=False,
+            failure_pred=False,
     ):
         super(CFATransformer, self).__init__(init_cfg=init_cfg)
 
@@ -50,6 +53,11 @@ class CFATransformer(BaseModule):
         self.modal_seq = modal_seq
         assert len(self.modal_seq) == self.decoder.num_layers, 'cfa modal_seq must same with decoder.num_layers'
 
+        self.use_self_attn = 'self_attn' in self.decoder.layers[0].operation_order
+        if self.use_self_attn:
+            self.dist_scaler = nn.Parameter(torch.randn(1), requires_grad=True)
+            self.dist_bias = nn.Parameter(torch.randn(1), requires_grad=True)
+            self.num_heads = decoder["transformerlayers"]["attn_cfgs"][0]["num_heads"]
         if self.use_type_embed:
             self.bev_type_embed = nn.Parameter(torch.randn(self.embed_dims))
             self.rv_type_embed = nn.Parameter(torch.randn(self.embed_dims))
@@ -74,8 +82,17 @@ class CFATransformer(BaseModule):
         self.numq_per_modal = numq_per_modal
         self.numq_per_modal_or = numq_per_modal * 7 // 10
         self.numq_per_modal_dn = numq_per_modal * 3 // 10
+        assert self.numq_per_modal_or + self.numq_per_modal_dn == self.numq_per_modal, "or+dn must be euqal with total number of query"
         self.num_classes = num_classes
         self.query_modal_types = query_modal_types
+
+        # modal embedding
+        self.modal_embedding = modal_embedding
+        if self.modal_embedding:
+            embed_dims = self.decoder.embed_dims
+            self.modal_embed = {'fused': nn.Parameter(torch.Tensor(embed_dims)).cuda(),
+                                'bev': nn.Parameter(torch.Tensor(embed_dims)).cuda(),
+                                'img': nn.Parameter(torch.Tensor(embed_dims)).cuda()}
 
         # for KV
         self.task_heads = nn.ModuleList()
@@ -109,6 +126,7 @@ class CFATransformer(BaseModule):
             nn.ReLU(inplace=True),
             nn.Linear(self.embed_dims, self.embed_dims)
         )
+        self.failure_pred = failure_pred
 
     def init_weights(self):
         # follow the official DETR to init parameters
@@ -116,6 +134,9 @@ class CFATransformer(BaseModule):
             if hasattr(m, 'weight') and m.weight.dim() > 1:
                 xavier_init(m, distribution='uniform')
         self._is_init = True
+        if self.modal_embedding:
+            for modal in self.modal_embed.keys():
+                normal_(self.modal_embed[modal])
 
     def select_top_queries(self, cls_scores, center, x_proj, reference, num_queries_per_modality, pad_size):
         batch_size, num_queries, num_classes = cls_scores.shape
@@ -127,6 +148,7 @@ class CFATransformer(BaseModule):
         selected_x_proj_list = []
         selected_reference_list = []
         selected_q_idx_list = []
+
         for b in range(batch_size):
             batch_cls_scores = cls_scores[b]
             batch_cls_scores_max = batch_cls_scores.max(1)[0]
@@ -202,8 +224,11 @@ class CFATransformer(BaseModule):
         center = list(center.split(num_queries_per_modality, dim=1))
         reference = list(reference.split(num_queries_per_modality, dim=1))
         center_top, x_proj_top, ref_top, mq_idx_top = [], [], [], []
+
         for i, modality in enumerate(self.query_modal_types):
             center_t, x_proj_t, ref_t, q_idx = self.select_top_queries(cls_scores[i], center[i], x_proj[i], reference[i], num_queries_per_modality, pad_size)
+            if self.modal_embedding:
+                x_proj_t = x_proj_t + self.modal_embed[modality].view(1, 1, -1)
             center_top.append(center_t)
             x_proj_top.append(x_proj_t)
             ref_top.append(ref_t)
@@ -219,15 +244,81 @@ class CFATransformer(BaseModule):
         # TODO: when 'img', 'bev' are added, _bev_query_embed and _rv_query embed required
         box_pos_embed = pos2embed(center, self.embed_dims)
         query_box_pos_embed = self.box_pos_embedding(box_pos_embed).transpose(0, 1)
-        target = self.decoder(
-            query=target,
-            key=ca_dict['memory_l'],
-            value=ca_dict['memory_v_l'],
-            query_pos=query_box_pos_embed,
-            key_pos=ca_dict['pos_embed_l'],
-            attn_masks=[None],
-            reg_branch=reg_branch,
-        )
+
+        attn_masks_in = [None]
+        if self.use_self_attn:
+            center_q = center.clone()
+            center_kv = center.clone()
+            dist = (center_q.unsqueeze(2) - center_kv.unsqueeze(1)).norm(p=2, dim=-1)
+            batch_size, num_queries, _ = dist.shape
+            num_modalities = 3
+            queries_per_modality = num_queries // num_modalities
+            
+            # # # 마스크 초기화 (모든 값을 0으로 설정)
+            # mask = torch.eye(num_queries,dtype=torch.float).unsqueeze(0).expand(batch_size,-1,-1).cuda()
+            
+            # for batch in range(batch_size):
+            #     for src_query in range(num_queries):
+            #         src_modality = src_query//queries_per_modality
+            #         for tgt_modality in range(num_modalities):
+            #             if src_modality != tgt_modality:
+            #                 tgt_start = tgt_modality * queries_per_modality
+            #                 tgt_end = (tgt_modality + 1) * queries_per_modality
+            #                 distances = dist[batch, src_query, tgt_start:tgt_end]
+            #                 nearest_center = distances.argmin().item() + tgt_start
+            #                 # 마스크 업데이트
+            #                 mask[batch, src_query, nearest_center] = 1.0
+            # mask_clone = mask.clone()
+
+            # 모달리티 인덱스 및 마스크 생성
+            src_modality = torch.arange(num_queries).unsqueeze(0).cuda() // queries_per_modality
+            tgt_modality = torch.arange(num_modalities).unsqueeze(0).cuda()
+            diff_modality = (src_modality.unsqueeze(-1) != tgt_modality).expand(batch_size, -1, -1)
+            # 가장 가까운 센터 찾기
+            nearest_centers = dist.view(batch_size, num_queries, num_modalities, -1).argmin(dim=-1)
+            nearest_centers += tgt_modality * queries_per_modality
+            # 마스크 생성 및 업데이트
+            dist_mask = torch.zeros_like(dist).cuda()
+            dist_mask[torch.arange(batch_size).unsqueeze(-1).unsqueeze(-1),torch.arange(num_queries).unsqueeze(0).unsqueeze(-1),nearest_centers] = diff_modality.float()
+            # 대각선 요소 설정
+            dist_mask.diagonal(dim1=1, dim2=2).fill_(1.0)
+            dist_mask = ~dist_mask.bool() # if float mask then mask is added
+            # attn_masks = torch.zeros((target.shape[0], target.shape[0]), dtype=torch.bool, device=target.device)
+            # attn_masks = torch.zeros_like(attn_masks, dtype=torch.float).float().masked_fill(attn_masks, float("-inf"))
+            # attn_masks = attn_masks + dist_mask
+            attn_masks = dist_mask
+            attn_masks = attn_masks.unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1)
+            attn_masks_in = [attn_masks, None]
+
+        if self.modal_embedding:
+            for idx, modal in enumerate(['fused', 'bev', 'img']):
+                ca_dict['memory_l'][idx] = ca_dict['memory_l'][idx] + self.modal_embed[modal].view(1, 1, -1)
+                ca_dict['memory_v_l'][idx] = ca_dict['memory_l'][idx] + self.modal_embed[modal].view(1, 1, -1)
+        if self.failure_pred:
+            target, weight_list = self.decoder(
+                query=target,
+                key=ca_dict['memory_l'],
+                value=ca_dict['memory_v_l'],
+                query_pos=query_box_pos_embed,
+                key_pos=ca_dict['pos_embed_l'],
+                attn_masks=attn_masks_in,
+                reg_branch=reg_branch,
+                modal_seq=self.modal_seq,
+                failure_pred=self.failure_pred
+            )
+        else:
+            target = self.decoder(
+                query=target,
+                key=ca_dict['memory_l'],
+                value=ca_dict['memory_v_l'],
+                query_pos=query_box_pos_embed,
+                key_pos=ca_dict['pos_embed_l'],
+                attn_masks=attn_masks_in,
+                reg_branch=reg_branch,
+                modal_seq=self.modal_seq,
+                failure_pred=self.failure_pred
+            )
+            weight_list = None
 
         target = target.transpose(1, 2)
         outs = self.task_heads[task_id](target)
@@ -241,4 +332,4 @@ class CFATransformer(BaseModule):
         outs['center'] = _center
         outs['height'] = _height
 
-        return outs, mq_idx
+        return outs, mq_idx, weight_list

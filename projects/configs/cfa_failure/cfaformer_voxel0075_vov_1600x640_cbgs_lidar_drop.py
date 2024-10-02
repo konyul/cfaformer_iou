@@ -265,9 +265,10 @@ model = dict(
         ensemble=dict(
             type='CFATransformer',
             use_cam_embed=True,
-            numq_per_modal=100,
+            numq_per_modal=150,
             #  modal_seq=['bev', 'img', 'fused'],
             modal_seq=['fused'],
+            failure_pred=True,
             decoder=dict(
                 type="PETRTransformerDecoder_KVseq",
                 return_intermediate=True,
@@ -276,6 +277,11 @@ model = dict(
                     type='PETRTransformerDecoderLayer',
                     with_cp=False,
                     attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=256,
+                            num_heads=8,
+                            dropout=0.1),
                         dict(
                             type='MultiheadAttention',
                             embed_dims=256,
@@ -292,7 +298,7 @@ model = dict(
                     ),
 
                     feedforward_channels=1024,
-                    operation_order=('cross_attn', 'norm', 'ffn', 'norm')
+                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
                 ),
             ),
             separate_head=dict(

@@ -7,7 +7,8 @@ import torch.utils.checkpoint as cp
 from mmcv.cnn import build_norm_layer
 from mmcv.cnn.bricks.drop import build_dropout
 from mmcv.cnn.bricks.registry import ATTENTION, TRANSFORMER_LAYER, TRANSFORMER_LAYER_SEQUENCE
-from mmcv.cnn.bricks.transformer import BaseTransformerLayer, TransformerLayerSequence
+from mmcv.cnn.bricks.transformer import TransformerLayerSequence
+from ._transformer import cfaBaseTransformerLayer
 from mmcv.runner.base_module import BaseModule
 from mmcv.utils import deprecated_api_warning
 
@@ -357,7 +358,7 @@ class PETRTransformerDecoder_KVseq(PETRTransformerDecoder):
         post_norm_cfg (dict): Config of last normalization layer. Default：
             `LN`.
     """
-    def forward(self, query, *args, **kwargs):
+    def forward(self, query, modal_seq, *args, **kwargs):
         """Forward function for `TransformerDecoder`.
         Args:
             query (Tensor): Input query with shape
@@ -377,20 +378,28 @@ class PETRTransformerDecoder_KVseq(PETRTransformerDecoder):
         key = [a.clone() for a in kwargs['key']]
         value = [a.clone() for a in kwargs['value']]
         key_pos = [a.clone() for a in kwargs['key_pos']]
+        mapping = {'fused': 0, 'bev': 1, 'img': 2}
+        mapped_seq = [mapping[item] for item in modal_seq]
         for i, layer in enumerate(self.layers):
-            kwargs['key'] = key[i]
-            kwargs['value'] = value[i]
-            kwargs['key_pos'] = key_pos[i]
-            query = layer(query, *args, **kwargs)
+            kwargs['key'] = key[mapped_seq[i]]
+            kwargs['value'] = value[mapped_seq[i]]
+            kwargs['key_pos'] = key_pos[mapped_seq[i]]
+            if kwargs['failure_pred']:
+                query, weight_list = layer(query, *args, **kwargs)
+            else:
+                query = layer(query, *args, **kwargs)
             if self.return_intermediate:
                 if self.post_norm is not None:
                     intermediate.append(self.post_norm(query))
                 else:
                     intermediate.append(query)
-        return torch.stack(intermediate)
+        if kwargs['failure_pred']:
+            return torch.stack(intermediate), weight_list
+        else:
+            return torch.stack(intermediate)
 
 @TRANSFORMER_LAYER.register_module()
-class PETRTransformerDecoderLayer(BaseTransformerLayer):
+class PETRTransformerDecoderLayer(cfaBaseTransformerLayer):
     """Implements decoder layer in DETR transformer.
     Args:
         attn_cfgs (list[`mmcv.ConfigDict`] | list[dict] | dict )):
@@ -441,23 +450,38 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
                  attn_masks=None,
                  query_key_padding_mask=None,
                  key_padding_mask=None,
+                 failure_pred=None,
                  ):
         """Forward function for `TransformerCoder`.
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
-        x = super(PETRTransformerDecoderLayer, self).forward(
-            query,
-            key=key,
-            value=value,
-            query_pos=query_pos,
-            key_pos=key_pos,
-            attn_masks=attn_masks,
-            query_key_padding_mask=query_key_padding_mask,
-            key_padding_mask=key_padding_mask,
-        )
-
-        return x
+        if failure_pred is not None:
+            x, weight_list = super(PETRTransformerDecoderLayer, self).forward(
+                query,
+                key=key,
+                value=value,
+                query_pos=query_pos,
+                key_pos=key_pos,
+                attn_masks=attn_masks,
+                query_key_padding_mask=query_key_padding_mask,
+                key_padding_mask=key_padding_mask,
+                failure_pred=failure_pred,
+            )
+            return x, weight_list
+        else:
+            x = super(PETRTransformerDecoderLayer, self).forward(
+                query,
+                key=key,
+                value=value,
+                query_pos=query_pos,
+                key_pos=key_pos,
+                attn_masks=attn_masks,
+                query_key_padding_mask=query_key_padding_mask,
+                key_padding_mask=key_padding_mask,
+                failure_pred=failure_pred,
+            )
+            return x
 
     def forward(self,
                 query,
@@ -474,29 +498,59 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
+        if 'failure_pred' in kwargs:
+            if self.use_checkpoint and self.training:
+                x, weight_list = cp.checkpoint(
+                    self._forward,
+                    query,
+                    key,
+                    value,
+                    query_pos,
+                    key_pos,
+                    attn_masks,
+                    query_key_padding_mask,
+                    key_padding_mask,
+                    kwargs['failure_pred'] if 'failure_pred' in kwargs else None
+                )
+            else:
+                x, weight_list = self._forward(
+                    query,
+                    key=key,
+                    value=value,
+                    query_pos=query_pos,
+                    key_pos=key_pos,
+                    attn_masks=attn_masks,
+                    query_key_padding_mask=query_key_padding_mask,
+                    key_padding_mask=key_padding_mask,
+                    failure_pred = kwargs['failure_pred'] if 'failure_pred' in kwargs else None
+                )
 
-        if self.use_checkpoint and self.training:
-            x = cp.checkpoint(
-                self._forward,
-                query,
-                key,
-                value,
-                query_pos,
-                key_pos,
-                attn_masks,
-                query_key_padding_mask,
-                key_padding_mask,
-            )
+            return x, weight_list
         else:
-            x = self._forward(
-                query,
-                key=key,
-                value=value,
-                query_pos=query_pos,
-                key_pos=key_pos,
-                attn_masks=attn_masks,
-                query_key_padding_mask=query_key_padding_mask,
-                key_padding_mask=key_padding_mask
-            )
+            if self.use_checkpoint and self.training:
+                x = cp.checkpoint(
+                    self._forward,
+                    query,
+                    key,
+                    value,
+                    query_pos,
+                    key_pos,
+                    attn_masks,
+                    query_key_padding_mask,
+                    key_padding_mask,
+                    kwargs['failure_pred'] if 'failure_pred' in kwargs else None
+                )
+            else:
+                x = self._forward(
+                    query,
+                    key=key,
+                    value=value,
+                    query_pos=query_pos,
+                    key_pos=key_pos,
+                    attn_masks=attn_masks,
+                    query_key_padding_mask=query_key_padding_mask,
+                    key_padding_mask=key_padding_mask,
+                    failure_pred = kwargs['failure_pred'] if 'failure_pred' in kwargs else None
+                )
 
-        return x
+            return x

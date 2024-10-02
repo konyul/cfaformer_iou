@@ -185,7 +185,7 @@ class MEFormerDetector(MVXTwoStageDetector):
             img_feats = [None]
         outs = self.pts_bbox_head(pts_feats, img_feats, img_metas)
         loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
-        losses = self.pts_bbox_head.loss(*loss_inputs)
+        losses = self.pts_bbox_head.loss(*loss_inputs, img_metas=img_metas)
         return losses
 
     def forward_test(self,
