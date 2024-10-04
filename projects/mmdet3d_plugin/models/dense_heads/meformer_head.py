@@ -804,7 +804,7 @@ class MEFormerHead(BaseModule):
 
             loss_dict[f'loss_cls_{modality}'] = loss_cls[-1]
             loss_dict[f'loss_bbox_{modality}'] = loss_bbox[-1]
-            
+            # for the purpose not to get loss (failure_pred)
             if preds_dicts[0][0]['weight_list'] is not None:
                 loss_weight_f_list = []
                 for weight_list in preds_dicts[0][0]['weight_list']:

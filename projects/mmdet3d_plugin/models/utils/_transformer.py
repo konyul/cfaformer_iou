@@ -851,13 +851,12 @@ class cfaBaseTransformerLayer(BaseModule):
                     _attn_masks = _attn_masks[:,0,:,:]
                     attn_query = query.clone().transpose(0,1)
                     non_zero_masks = _attn_masks.nonzero(as_tuple=True)
-                    attn_query = attn_query[non_zero_masks[0],non_zero_masks[2]].view(batch_size, 3, _num_queries, _query_dim)
-                    attn_query = attn_query.permute(0,2,1,3).reshape(batch_size,_num_queries,-1)
+                    attn_query = attn_query[non_zero_masks[0],non_zero_masks[2]].view(batch_size, _num_queries, 3, _query_dim)
+                    attn_query = attn_query.reshape(batch_size,_num_queries,-1)
                     attn_query = self.mlp(attn_query)
                     _attn_weight = attn_query.permute(1,0,2).sigmoid()
                     query = query * _attn_weight
                     weight_list.append(_attn_weight)
-
 
             elif layer == 'cross_attn':
                 query = self.attentions[attn_index](

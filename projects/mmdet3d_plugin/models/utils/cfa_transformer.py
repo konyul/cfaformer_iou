@@ -271,8 +271,9 @@ class CFATransformer(BaseModule):
             # mask_clone = mask.clone()
 
             # 모달리티 인덱스 및 마스크 생성
-            src_modality = torch.arange(num_queries).unsqueeze(0).cuda() // queries_per_modality
-            tgt_modality = torch.arange(num_modalities).unsqueeze(0).cuda()
+
+            src_modality = torch.arange(num_queries).unsqueeze(0).cuda() // queries_per_modality # modality index 1,450
+            tgt_modality = torch.arange(num_modalities).unsqueeze(0).cuda() # modality index 1,3
             diff_modality = (src_modality.unsqueeze(-1) != tgt_modality).expand(batch_size, -1, -1)
             # 가장 가까운 센터 찾기
             nearest_centers = dist.view(batch_size, num_queries, num_modalities, -1).argmin(dim=-1)
