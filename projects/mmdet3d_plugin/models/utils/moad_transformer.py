@@ -90,7 +90,7 @@ class MOADTransformer(BaseModule):
             imgs2lidars = rearrange(imgs2lidars, '(bs v) c h w -> (v h w) bs c', bs=bs)
 
         out_decs = []
-        ca_dict = {"memory_l": [], "memory_v_l": [], "query_embed_l": [], "pos_embed_l": []}
+        ca_dict = {"memory_l": [], "memory_v_l": [], "query_embed_l": [], "pos_embed_l": [], "memory_lc_idx": []}
         for modality in modalities:
             if modality == "fused":
                 memory, pos_embed = (torch.cat([bev_memory, rv_memory], dim=0),
@@ -124,6 +124,8 @@ class MOADTransformer(BaseModule):
             out_decs.append(out_dec.transpose(1, 2))
 
             # for cfa
+            if modality == "fused":
+                ca_dict['memory_lc_idx'].append(memory.clone())    
             ca_dict['memory_l'].append(memory.clone())
             ca_dict['memory_v_l'].append(memory_v.clone())
             ca_dict['query_embed_l'].append(query_embed.clone())

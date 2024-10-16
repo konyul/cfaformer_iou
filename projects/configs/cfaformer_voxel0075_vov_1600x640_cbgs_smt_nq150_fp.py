@@ -371,6 +371,7 @@ dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = None
 load_from = 'ckpts/moad_voxel0075_vov_1600x640_cbgs.pth'
+# load_from = 'work_dirs/sota_fp_loss_moe/20241011-193031/epoch_6.pth'
 resume_from = None
 workflow = [('train', 1)]
 gpu_ids = range(0, 8)

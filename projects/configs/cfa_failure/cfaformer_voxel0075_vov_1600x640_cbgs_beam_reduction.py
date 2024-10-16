@@ -306,7 +306,8 @@ model = dict(
             numq_per_modal=150,
             #  modal_seq=['bev', 'img', 'fused'],
             modal_seq=['fused'],
-            failure_pred=True,
+            # failure_pred=True,
+            locality_aware_failure_pred=True,
             decoder=dict(
                 type="PETRTransformerDecoder_KVseq",
                 return_intermediate=True,
@@ -336,7 +337,7 @@ model = dict(
                     ),
 
                     feedforward_channels=1024,
-                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
+                    operation_order=('cross_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
                 ),
             ),
             separate_head=dict(

@@ -126,14 +126,13 @@ class SparseEncoder(nn.Module):
         for encoder_layer in self.encoder_layers:
             x = encoder_layer(x)
             encode_features.append(x)
-
         # for detection head
         # [200, 176, 5] -> [200, 176, 2]
         out = self.conv_out(encode_features[-1])
         spatial_features = out.dense()
 
         N, C, D, H, W = spatial_features.shape
-        spatial_features = spatial_features.view(N, C * D, H, W)
+        spatial_features = spatial_features.view(N, C * D, H, W) # batch, channel*z, y,x
 
         return spatial_features
 

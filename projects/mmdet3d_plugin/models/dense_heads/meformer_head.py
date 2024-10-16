@@ -158,6 +158,7 @@ class MEFormerHead(BaseModule):
             self.assigner = build_assigner(train_cfg["assigner"])
             sampler_cfg = dict(type='PseudoSampler')
             self.sampler = build_sampler(sampler_cfg, context=self)
+        self._criterion = nn.CrossEntropyLoss()
 
     def init_weights(self):
         super(MEFormerHead, self).init_weights()
@@ -372,7 +373,6 @@ class MEFormerHead(BaseModule):
             _height[..., 0:1] = height[..., 0:1] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
             outs['center'] = _center
             outs['height'] = _height
-            
             if self.use_ensemble and self.ensemble.__class__.__name__ == 'CFATransformer':
                 pc_range = torch.Tensor(self.pc_range).to(reference.device)
                 outs, mq_idx, weight_list = self.ensemble(
@@ -809,13 +809,16 @@ class MEFormerHead(BaseModule):
                 loss_weight_f_list = []
                 for weight_list in preds_dicts[0][0]['weight_list']:
                     weight_list = weight_list.squeeze(-1).transpose(0,1)
-                    batch_size,_num_queries = weight_list.shape
+                    # batch_size,_num_queries = weight_list.shape
+                    batch_size,_num_queries, _ = weight_list.shape
                     weight_f_target = torch.tensor([i['modalmask'] for i in kwargs['img_metas']]).cuda()
-                    weight_f_target_expanded = torch.zeros(batch_size, _num_queries).cuda()
-                    weight_f_target_expanded[weight_f_target[:, 0] == 1, :int(_num_queries/3)] = 1
-                    weight_f_target_expanded[weight_f_target[:, 1] == 1, int(_num_queries/3):int(2*_num_queries/3)] = 1
-                    weight_f_target_expanded[weight_f_target[:, 2] == 1, int(2*_num_queries/3):] = 1
-                    loss_weight_f = F.binary_cross_entropy(weight_list, weight_f_target_expanded)
+                    weight_f_target_expanded = weight_f_target.unsqueeze(1).repeat(1,_num_queries,1)
+                    loss_weight_f = self._criterion(weight_list,weight_f_target_expanded.float())/_num_queries
+                    # weight_f_target_expanded = torch.zeros(batch_size, _num_queries).cuda()
+                    # weight_f_target_expanded[weight_f_target[:, 0] == 1, :int(_num_queries/3)] = 1
+                    # weight_f_target_expanded[weight_f_target[:, 1] == 1, int(_num_queries/3):int(2*_num_queries/3)] = 1
+                    # weight_f_target_expanded[weight_f_target[:, 2] == 1, int(2*_num_queries/3):] = 1
+                    # loss_weight_f = F.binary_cross_entropy(weight_list, weight_f_target_expanded)
                     loss_weight_f_list.append(loss_weight_f)
                 loss_dict[f'loss_weight_f_{modality}'] = sum(loss_weight_f_list)
 

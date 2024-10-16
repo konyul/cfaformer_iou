@@ -342,7 +342,7 @@ class PETRTransformerDecoder(TransformerLayerSequence):
 
         intermediate = []
         for layer in self.layers:
-            query = layer(query, *args, **kwargs)
+            query, _ = layer(query, *args, **kwargs)
             if self.return_intermediate:
                 if self.post_norm is not None:
                     intermediate.append(self.post_norm(query))
@@ -384,19 +384,13 @@ class PETRTransformerDecoder_KVseq(PETRTransformerDecoder):
             kwargs['key'] = key[mapped_seq[i]]
             kwargs['value'] = value[mapped_seq[i]]
             kwargs['key_pos'] = key_pos[mapped_seq[i]]
-            if kwargs['failure_pred']:
-                query, weight_list = layer(query, *args, **kwargs)
-            else:
-                query = layer(query, *args, **kwargs)
+            query, weight_list = layer(query, *args, **kwargs)
             if self.return_intermediate:
                 if self.post_norm is not None:
                     intermediate.append(self.post_norm(query))
                 else:
                     intermediate.append(query)
-        if kwargs['failure_pred']:
-            return torch.stack(intermediate), weight_list
-        else:
-            return torch.stack(intermediate)
+        return torch.stack(intermediate), weight_list
 
 @TRANSFORMER_LAYER.register_module()
 class PETRTransformerDecoderLayer(cfaBaseTransformerLayer):
@@ -450,39 +444,25 @@ class PETRTransformerDecoderLayer(cfaBaseTransformerLayer):
                  attn_masks=None,
                  query_key_padding_mask=None,
                  key_padding_mask=None,
-                 failure_pred=None,
+                 **kwargs
                  ):
         """Forward function for `TransformerCoder`.
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
-        if failure_pred is not None:
-            x, weight_list = super(PETRTransformerDecoderLayer, self).forward(
-                query,
-                key=key,
-                value=value,
-                query_pos=query_pos,
-                key_pos=key_pos,
-                attn_masks=attn_masks,
-                query_key_padding_mask=query_key_padding_mask,
-                key_padding_mask=key_padding_mask,
-                failure_pred=failure_pred,
-            )
-            return x, weight_list
-        else:
-            x = super(PETRTransformerDecoderLayer, self).forward(
-                query,
-                key=key,
-                value=value,
-                query_pos=query_pos,
-                key_pos=key_pos,
-                attn_masks=attn_masks,
-                query_key_padding_mask=query_key_padding_mask,
-                key_padding_mask=key_padding_mask,
-                failure_pred=failure_pred,
-            )
-            return x
-
+        x, weight_list = super(PETRTransformerDecoderLayer, self).forward(
+            query,
+            key=key,
+            value=value,
+            query_pos=query_pos,
+            key_pos=key_pos,
+            attn_masks=attn_masks,
+            query_key_padding_mask=query_key_padding_mask,
+            key_padding_mask=key_padding_mask,
+            **kwargs,
+        )
+        return x, weight_list
+    
     def forward(self,
                 query,
                 key=None,
@@ -498,59 +478,30 @@ class PETRTransformerDecoderLayer(cfaBaseTransformerLayer):
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
-        if 'failure_pred' in kwargs:
-            if self.use_checkpoint and self.training:
-                x, weight_list = cp.checkpoint(
-                    self._forward,
-                    query,
-                    key,
-                    value,
-                    query_pos,
-                    key_pos,
-                    attn_masks,
-                    query_key_padding_mask,
-                    key_padding_mask,
-                    kwargs['failure_pred'] if 'failure_pred' in kwargs else None
-                )
-            else:
-                x, weight_list = self._forward(
-                    query,
-                    key=key,
-                    value=value,
-                    query_pos=query_pos,
-                    key_pos=key_pos,
-                    attn_masks=attn_masks,
-                    query_key_padding_mask=query_key_padding_mask,
-                    key_padding_mask=key_padding_mask,
-                    failure_pred = kwargs['failure_pred'] if 'failure_pred' in kwargs else None
-                )
-
-            return x, weight_list
+        if self.use_checkpoint and self.training:
+            x, weight_list = cp.checkpoint(
+                self._forward,
+                query,
+                key,
+                value,
+                query_pos,
+                key_pos,
+                attn_masks,
+                query_key_padding_mask,
+                key_padding_mask,
+                **kwargs
+            )
         else:
-            if self.use_checkpoint and self.training:
-                x = cp.checkpoint(
-                    self._forward,
-                    query,
-                    key,
-                    value,
-                    query_pos,
-                    key_pos,
-                    attn_masks,
-                    query_key_padding_mask,
-                    key_padding_mask,
-                    kwargs['failure_pred'] if 'failure_pred' in kwargs else None
-                )
-            else:
-                x = self._forward(
-                    query,
-                    key=key,
-                    value=value,
-                    query_pos=query_pos,
-                    key_pos=key_pos,
-                    attn_masks=attn_masks,
-                    query_key_padding_mask=query_key_padding_mask,
-                    key_padding_mask=key_padding_mask,
-                    failure_pred = kwargs['failure_pred'] if 'failure_pred' in kwargs else None
-                )
-
-            return x
+            x, weight_list = self._forward(
+                query,
+                key=key,
+                value=value,
+                query_pos=query_pos,
+                key_pos=key_pos,
+                attn_masks=attn_masks,
+                query_key_padding_mask=query_key_padding_mask,
+                key_padding_mask=key_padding_mask,
+                **kwargs
+            )
+        return x, weight_list
+        

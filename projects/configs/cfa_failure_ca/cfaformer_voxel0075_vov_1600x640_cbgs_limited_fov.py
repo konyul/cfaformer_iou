@@ -119,14 +119,16 @@ test_pipeline = [
         coord_type='LIDAR',
         load_dim=5,
         use_dim=[0, 1, 2, 3, 4],
+        reduce_beams = False
     ),
     dict(
         type='LoadPointsFromMultiSweeps',
         sweeps_num=10,
         use_dim=[0, 1, 2, 3, 4],
+        reduce_beams = False,
+        limited_fov = True
     ),
-    dict(type='LoadMultiViewImageFromFiles',
-         occlusion=True),
+    dict(type='LoadMultiViewImageFromFiles'),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -306,7 +308,6 @@ model = dict(
             #  modal_seq=['bev', 'img', 'fused'],
             modal_seq=['fused'],
             # failure_pred=True,
-            locality_aware_failure_pred=True,
             decoder=dict(
                 type="PETRTransformerDecoder_KVseq",
                 return_intermediate=True,
@@ -315,11 +316,6 @@ model = dict(
                     type='PETRTransformerDecoderLayer',
                     with_cp=False,
                     attn_cfgs=[
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=256,
-                            num_heads=8,
-                            dropout=0.1),
                         dict(
                             type='MultiheadAttention',
                             embed_dims=256,
@@ -336,7 +332,7 @@ model = dict(
                     ),
 
                     feedforward_channels=1024,
-                    operation_order=('cross_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
+                    operation_order=('cross_attn', 'norm', 'ffn', 'norm')
                 ),
             ),
             separate_head=dict(

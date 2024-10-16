@@ -8,7 +8,7 @@ class_names = [
 ]
 voxel_size = [0.075, 0.075, 0.2]
 out_size_factor = 8
-evaluation = dict(interval=4)
+evaluation = dict(interval=1)
 dataset_type = 'CustomNuScenesDataset'
 data_root = 'data/nuscenes/'
 input_modality = dict(
@@ -45,46 +45,6 @@ train_pipeline = [
     ),
     dict(type='LoadMultiViewImageFromFiles'),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
-    dict(
-        type='UnifiedObjectSample',
-        sample_2d=True,
-        mixup_rate=0.5,
-        db_sampler=dict(
-            type='UnifiedDataBaseSampler',
-            data_root=data_root,
-            info_path=data_root + 'nuscenes_dbinfos_train.pkl',
-            rate=1.0,
-            prepare=dict(
-                filter_by_difficulty=[-1],
-                filter_by_min_points=dict(
-                    car=5,
-                    truck=5,
-                    bus=5,
-                    trailer=5,
-                    construction_vehicle=5,
-                    traffic_cone=5,
-                    barrier=5,
-                    motorcycle=5,
-                    bicycle=5,
-                    pedestrian=5)),
-            classes=class_names,
-            sample_groups=dict(
-                car=2,
-                truck=3,
-                construction_vehicle=7,
-                bus=4,
-                trailer=6,
-                barrier=2,
-                motorcycle=6,
-                bicycle=6,
-                pedestrian=2,
-                traffic_cone=2),
-            points_loader=dict(
-                type='LoadPointsFromFile',
-                coord_type='LIDAR',
-                load_dim=5,
-                use_dim=[0, 1, 2, 3, 4],
-            ))),
     dict(
         type='GlobalRotScaleTransAll',
         rot_range=[-0.3925 * 2, 0.3925 * 2],
@@ -125,8 +85,11 @@ test_pipeline = [
         sweeps_num=10,
         use_dim=[0, 1, 2, 3, 4],
     ),
-    dict(type='LoadMultiViewImageFromFiles',
-         occlusion=True),
+    dict(type='LoadMultiViewImageFromFiles'),
+    dict(type='ModalMask3D',
+          mode= 'test',
+          mask_modal ='points'
+    ),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -150,7 +113,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=4,
     workers_per_gpu=6,
     train=dict(
         type='CBGSDataset',
@@ -306,7 +269,6 @@ model = dict(
             #  modal_seq=['bev', 'img', 'fused'],
             modal_seq=['fused'],
             # failure_pred=True,
-            locality_aware_failure_pred=True,
             decoder=dict(
                 type="PETRTransformerDecoder_KVseq",
                 return_intermediate=True,
@@ -315,11 +277,6 @@ model = dict(
                     type='PETRTransformerDecoderLayer',
                     with_cp=False,
                     attn_cfgs=[
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=256,
-                            num_heads=8,
-                            dropout=0.1),
                         dict(
                             type='MultiheadAttention',
                             embed_dims=256,
@@ -336,7 +293,7 @@ model = dict(
                     ),
 
                     feedforward_channels=1024,
-                    operation_order=('cross_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
+                    operation_order=('cross_attn', 'norm', 'ffn', 'norm')
                 ),
             ),
             separate_head=dict(
@@ -390,18 +347,18 @@ optimizer_config = dict(
     loss_scale='dynamic',
     grad_clip=dict(max_norm=35, norm_type=2),
     custom_fp16=dict(pts_voxel_encoder=False, pts_middle_encoder=False, pts_bbox_head=False))
-
 lr_config = dict(
-    policy='cyclic',
-    target_ratio=(6, 0.0001),
-    cyclic_times=1,
-    step_ratio_up=0.4)
+    policy='CosineAnnealing',
+    by_epoch=False,
+    min_lr_ratio=0.001,
+    warmup="linear",
+    warmup_iters=1000)
 momentum_config = dict(
     policy='cyclic',
     target_ratio=(0.8947368421052632, 1),
     cyclic_times=1,
     step_ratio_up=0.4)
-total_epochs = 20
+total_epochs = 6
 checkpoint_config = dict(interval=1)
 log_config = dict(
     interval=50,
@@ -410,16 +367,16 @@ log_config = dict(
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = None
-load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
+load_from = 'ckpts/moad_voxel0075_vov.pth'
 resume_from = None
 workflow = [('train', 1)]
 gpu_ids = range(0, 8)
 
 custom_hooks = [
     dict(
-        type="DropGTSamplingHook",
-        priority="LOWEST",
-        pipeline_name="UnifiedObjectSample",
-        drop_epoch=15
+        type="FreezeWeight",
+        finetune_weight=["pts_bbox_head.ensemble"]
     )
 ]
+
+find_unused_parameters = True

@@ -136,7 +136,8 @@ class MEFormerDetector(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
-
+        # vis
+        img_metas[0]['img'] = img
         img_feats, pts_feats = self.extract_feat(
             points, img=img, img_metas=img_metas)
         losses = dict()
