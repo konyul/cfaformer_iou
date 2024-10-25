@@ -180,87 +180,87 @@ class MEFormerHead(BaseModule):
         return coord_base
 
     def prepare_for_dn(self, batch_size, reference_points, img_metas):
-        if self.training:
-            targets = [
-                torch.cat((img_meta['gt_bboxes_3d']._data.gravity_center, img_meta['gt_bboxes_3d']._data.tensor[:, 3:]),
-                          dim=1) for img_meta in img_metas]
-            labels = [img_meta['gt_labels_3d']._data for img_meta in img_metas]
-            known = [(torch.ones_like(t)).cuda() for t in labels]
-            know_idx = known
-            unmask_bbox = unmask_label = torch.cat(known)
-            known_num = [t.size(0) for t in targets]
-            labels = torch.cat([t for t in labels])
-            boxes = torch.cat([t for t in targets])
-            batch_idx = torch.cat([torch.full((t.size(0),), i) for i, t in enumerate(targets)])
+        # if self.training:
+        #     targets = [
+        #         torch.cat((img_meta['gt_bboxes_3d']._data.gravity_center, img_meta['gt_bboxes_3d']._data.tensor[:, 3:]),
+        #                   dim=1) for img_meta in img_metas]
+        #     labels = [img_meta['gt_labels_3d']._data for img_meta in img_metas]
+        #     known = [(torch.ones_like(t)).cuda() for t in labels]
+        #     know_idx = known
+        #     unmask_bbox = unmask_label = torch.cat(known)
+        #     known_num = [t.size(0) for t in targets]
+        #     labels = torch.cat([t for t in labels])
+        #     boxes = torch.cat([t for t in targets])
+        #     batch_idx = torch.cat([torch.full((t.size(0),), i) for i, t in enumerate(targets)])
 
-            known_indice = torch.nonzero(unmask_label + unmask_bbox)
-            known_indice = known_indice.view(-1)
-            # add noise
-            groups = min(self.scalar, self.num_query // max(known_num))
-            known_indice = known_indice.repeat(groups, 1).view(-1)
-            known_labels = labels.repeat(groups, 1).view(-1).long().to(reference_points.device)
-            known_labels_raw = labels.repeat(groups, 1).view(-1).long().to(reference_points.device)
-            known_bid = batch_idx.repeat(groups, 1).view(-1)
-            known_bboxs = boxes.repeat(groups, 1).to(reference_points.device)
-            known_bbox_center = known_bboxs[:, :3].clone()
-            known_bbox_scale = known_bboxs[:, 3:6].clone()
+        #     known_indice = torch.nonzero(unmask_label + unmask_bbox)
+        #     known_indice = known_indice.view(-1)
+        #     # add noise
+        #     groups = min(self.scalar, self.num_query // max(known_num))
+        #     known_indice = known_indice.repeat(groups, 1).view(-1)
+        #     known_labels = labels.repeat(groups, 1).view(-1).long().to(reference_points.device)
+        #     known_labels_raw = labels.repeat(groups, 1).view(-1).long().to(reference_points.device)
+        #     known_bid = batch_idx.repeat(groups, 1).view(-1)
+        #     known_bboxs = boxes.repeat(groups, 1).to(reference_points.device)
+        #     known_bbox_center = known_bboxs[:, :3].clone()
+        #     known_bbox_scale = known_bboxs[:, 3:6].clone()
 
-            if self.bbox_noise_scale > 0:
-                diff = known_bbox_scale / 2 + self.bbox_noise_trans
-                rand_prob = torch.rand_like(known_bbox_center) * 2 - 1.0
-                known_bbox_center += torch.mul(rand_prob,
-                                               diff) * self.bbox_noise_scale
-                known_bbox_center[..., 0:1] = (known_bbox_center[..., 0:1] - self.pc_range[0]) / (
-                        self.pc_range[3] - self.pc_range[0])
-                known_bbox_center[..., 1:2] = (known_bbox_center[..., 1:2] - self.pc_range[1]) / (
-                        self.pc_range[4] - self.pc_range[1])
-                known_bbox_center[..., 2:3] = (known_bbox_center[..., 2:3] - self.pc_range[2]) / (
-                        self.pc_range[5] - self.pc_range[2])
-                known_bbox_center = known_bbox_center.clamp(min=0.0, max=1.0)
-                mask = torch.norm(rand_prob, 2, 1) > self.split
-                known_labels[mask] = sum(self.num_classes)
+        #     if self.bbox_noise_scale > 0:
+        #         diff = known_bbox_scale / 2 + self.bbox_noise_trans
+        #         rand_prob = torch.rand_like(known_bbox_center) * 2 - 1.0
+        #         known_bbox_center += torch.mul(rand_prob,
+        #                                        diff) * self.bbox_noise_scale
+        #         known_bbox_center[..., 0:1] = (known_bbox_center[..., 0:1] - self.pc_range[0]) / (
+        #                 self.pc_range[3] - self.pc_range[0])
+        #         known_bbox_center[..., 1:2] = (known_bbox_center[..., 1:2] - self.pc_range[1]) / (
+        #                 self.pc_range[4] - self.pc_range[1])
+        #         known_bbox_center[..., 2:3] = (known_bbox_center[..., 2:3] - self.pc_range[2]) / (
+        #                 self.pc_range[5] - self.pc_range[2])
+        #         known_bbox_center = known_bbox_center.clamp(min=0.0, max=1.0)
+        #         mask = torch.norm(rand_prob, 2, 1) > self.split
+        #         known_labels[mask] = sum(self.num_classes)
 
-            single_pad = int(max(known_num))
-            pad_size = int(single_pad * groups)
-            padding_bbox = torch.zeros(pad_size, 3).to(reference_points.device)
-            padded_reference_points = torch.cat([padding_bbox, reference_points], dim=0).unsqueeze(0).repeat(batch_size,
-                                                                                                             1, 1)
+        #     single_pad = int(max(known_num))
+        #     pad_size = int(single_pad * groups)
+        #     padding_bbox = torch.zeros(pad_size, 3).to(reference_points.device)
+        #     padded_reference_points = torch.cat([padding_bbox, reference_points], dim=0).unsqueeze(0).repeat(batch_size,
+        #                                                                                                      1, 1)
 
-            if len(known_num):
-                map_known_indice = torch.cat([torch.tensor(range(num)) for num in known_num])  # [1,2, 1,2,3]
-                map_known_indice = torch.cat([map_known_indice + single_pad * i for i in range(groups)]).long()
-            if len(known_bid):
-                padded_reference_points[(known_bid.long(), map_known_indice)] = known_bbox_center.to(
-                    reference_points.device)
+        #     if len(known_num):
+        #         map_known_indice = torch.cat([torch.tensor(range(num)) for num in known_num])  # [1,2, 1,2,3]
+        #         map_known_indice = torch.cat([map_known_indice + single_pad * i for i in range(groups)]).long()
+        #     if len(known_bid):
+        #         padded_reference_points[(known_bid.long(), map_known_indice)] = known_bbox_center.to(
+        #             reference_points.device)
 
-            tgt_size = pad_size + self.num_query
-            attn_mask = torch.ones(tgt_size, tgt_size).to(reference_points.device) < 0
-            # match query cannot see the reconstruct
-            attn_mask[pad_size:, :pad_size] = True
-            # reconstruct cannot see each other
-            for i in range(groups):
-                if i == 0:
-                    attn_mask[single_pad * i:single_pad * (i + 1), single_pad * (i + 1):pad_size] = True
-                if i == groups - 1:
-                    attn_mask[single_pad * i:single_pad * (i + 1), :single_pad * i] = True
-                else:
-                    attn_mask[single_pad * i:single_pad * (i + 1), single_pad * (i + 1):pad_size] = True
-                    attn_mask[single_pad * i:single_pad * (i + 1), :single_pad * i] = True
+        #     tgt_size = pad_size + self.num_query
+        #     attn_mask = torch.ones(tgt_size, tgt_size).to(reference_points.device) < 0
+        #     # match query cannot see the reconstruct
+        #     attn_mask[pad_size:, :pad_size] = True
+        #     # reconstruct cannot see each other
+        #     for i in range(groups):
+        #         if i == 0:
+        #             attn_mask[single_pad * i:single_pad * (i + 1), single_pad * (i + 1):pad_size] = True
+        #         if i == groups - 1:
+        #             attn_mask[single_pad * i:single_pad * (i + 1), :single_pad * i] = True
+        #         else:
+        #             attn_mask[single_pad * i:single_pad * (i + 1), single_pad * (i + 1):pad_size] = True
+        #             attn_mask[single_pad * i:single_pad * (i + 1), :single_pad * i] = True
 
-            mask_dict = {
-                'known_indice': torch.as_tensor(known_indice).long(),
-                'batch_idx': torch.as_tensor(batch_idx).long(),
-                'map_known_indice': torch.as_tensor(map_known_indice).long(),
-                'known_lbs_bboxes': (known_labels, known_bboxs),
-                'known_labels_raw': known_labels_raw,
-                'know_idx': know_idx,
-                'pad_size': pad_size
-            }
+        #     mask_dict = {
+        #         'known_indice': torch.as_tensor(known_indice).long(),
+        #         'batch_idx': torch.as_tensor(batch_idx).long(),
+        #         'map_known_indice': torch.as_tensor(map_known_indice).long(),
+        #         'known_lbs_bboxes': (known_labels, known_bboxs),
+        #         'known_labels_raw': known_labels_raw,
+        #         'know_idx': know_idx,
+        #         'pad_size': pad_size
+        #     }
 
-        else:
-            padded_reference_points = reference_points.unsqueeze(0).repeat(batch_size, 1, 1)
-            attn_mask = None
-            mask_dict = None
+        # else:
+        padded_reference_points = reference_points.unsqueeze(0).repeat(batch_size, 1, 1)
+        attn_mask = None
+        mask_dict = None
 
         return padded_reference_points, attn_mask, mask_dict
 
@@ -352,15 +352,27 @@ class MEFormerHead(BaseModule):
         modalities = copy.deepcopy(self.modalities["train" if self.training else "test"])
         outs_dec, ca_dict = self.transformer(
             x, x_img, bev_query_embeds, rv_query_embeds, bev_pos_embeds, rv_pos_embeds, img_metas,
-            attn_masks=attn_mask, modalities=modalities
+            attn_masks=attn_mask, modalities=modalities, ref_points=reference_points, pc_range=self.pc_range,
         )
         num_queries_per_modality = [m.shape[2] for m in outs_dec]
         outs_dec = torch.cat(outs_dec, dim=2)
+        ##
+        if 'zero_idx' in ca_dict and not self.training:
+            _num_decoder, _, _, _dim = outs_dec.shape
+            zero_idx = torch.cat(ca_dict['zero_idx'], dim=2)
+            _zero_idx = zero_idx[-1][-1]
+            outs_dec = outs_dec[-1][-1][_zero_idx]
+            outs_dec = outs_dec.unsqueeze(0).repeat(_num_decoder,1,1).unsqueeze(1)
+            # outs_dec = outs_dec[zero_idx]
+            # outs_dec = outs_dec.view(_num_decoder,1,-1,_dim) # 5400,256
+        ##
         outs_dec = torch.nan_to_num(outs_dec)
-
         reference = inverse_sigmoid(reference_points.clone())
         reference = reference.repeat(1, len(modalities), 1)
-
+        ##
+        if 'zero_idx' in ca_dict and not self.training:
+            reference = reference[zero_idx[-1]][None,...]
+        ##
         flag = 0
         for task_id, task in enumerate(self.task_heads, 0):
             outs = task(outs_dec)
@@ -375,7 +387,7 @@ class MEFormerHead(BaseModule):
             outs['height'] = _height
             if self.use_ensemble and self.ensemble.__class__.__name__ == 'CFATransformer':
                 pc_range = torch.Tensor(self.pc_range).to(reference.device)
-                outs, mq_idx, weight_list = self.ensemble(
+                outs, mq_idx, weight_list, loss_weight_f, target = self.ensemble(
                     x, 
                     x_img, 
                     bev_query_embeds,
@@ -391,10 +403,13 @@ class MEFormerHead(BaseModule):
                     ca_dict,
                     task_id,
                     mask_dict['pad_size'] if self.training else 0,
-                    attn_masks=attn_mask
+                    self.training,
+                    attn_masks=attn_mask,
                 )
                 modalities = ["ensemble"]
                 num_queries_per_modality = [outs["center"].shape[2]]
+                outs['weight_list'] = weight_list
+                outs['loss_weight_f'] = loss_weight_f
 
             elif self.use_ensemble and "fused" in modalities:
                 pc_range = torch.Tensor(self.pc_range).to(reference.device)
@@ -414,6 +429,8 @@ class MEFormerHead(BaseModule):
 
             if self.training:
                 for key in outs.keys():
+                    if key in ['r_loss','weight_list','loss_weight_f']:
+                        continue
                     outs[key] = list(outs[key].split(num_queries_per_modality, dim=2))
 
             outs["modalities"] = modalities
@@ -446,7 +463,7 @@ class MEFormerHead(BaseModule):
                 flag += len(class_name)
 
                 for key in list(outs.keys()):
-                    if key not in ["modalities"]:
+                    if key not in ["modalities", "r_loss",'weight_list','loss_weight_f']:
                         outs["dn_" + key] = []
                         if self.use_ensemble and self.ensemble.__class__.__name__ == 'CFATransformer':
                             pad_s = self.ensemble.numq_per_modal_dn*3
@@ -458,9 +475,18 @@ class MEFormerHead(BaseModule):
                             outs[key][i] = outs[key][i][:, :, pad_s:, :]
 
                 outs['dn_mask_dict'] = task_mask_dict
-            outs['weight_list'] = weight_list
+            
+            if self.use_ensemble and not self.training:
+                num_query_per_modal = target.shape[0]//3
+                for key, value in outs.items():
+                    if key not in ['modalities', 'weight_list','loss_weight_f']:
+                        outs[key] = outs[key][-1].squeeze(0)[mq_idx.squeeze()]
+                        modal_idx = target.max(-1)[1]
+                        result = torch.repeat_interleave(torch.arange(3), num_query_per_modal).cuda()
+                        outs[key] = outs[key][modal_idx==result].unsqueeze(0).unsqueeze(0)
             ret_dicts.append(outs)
-
+        if 'qmod_sel_loss' in ca_dict:
+            outs['qmod_sel_loss'] = ca_dict['qmod_sel_loss']
         return ret_dicts
 
     def forward(self, pts_feats, img_feats=None, img_metas=None):
@@ -780,83 +806,92 @@ class MEFormerHead(BaseModule):
             dict[str, Tensor]: A dictionary of loss components.
         """
         loss_dict = dict()
-        for i, modality in enumerate(preds_dicts[0][0]["modalities"]):
-            num_decoder = preds_dicts[0][0]['center'][i].shape[0]
-            all_pred_bboxes, all_pred_logits = collections.defaultdict(list), collections.defaultdict(list)
+        if 'loss_weight_f' in preds_dicts[0][0] and preds_dicts[0][0]['loss_weight_f'] is None:
+            for i, modality in enumerate(preds_dicts[0][0]["modalities"]):
+                num_decoder = preds_dicts[0][0]['center'][i].shape[0]
+                all_pred_bboxes, all_pred_logits = collections.defaultdict(list), collections.defaultdict(list)
 
-            for task_id, preds_dict in enumerate(preds_dicts, 0):
-                for dec_id in range(num_decoder):
-                    pred_bbox = [preds_dict[0]['center'][i][dec_id], preds_dict[0]['height'][i][dec_id],
-                                 preds_dict[0]['dim'][i][dec_id], preds_dict[0]['rot'][i][dec_id]]
-                    if 'vel' in preds_dict[0]:
-                        pred_bbox.append(preds_dict[0]['vel'][i][dec_id])
-                    pred_bbox = torch.cat(pred_bbox, dim=-1)
-                    all_pred_bboxes[dec_id].append(pred_bbox)
-                    all_pred_logits[dec_id].append(preds_dict[0]['cls_logits'][i][dec_id])
-            all_pred_bboxes = [all_pred_bboxes[idx] for idx in range(num_decoder)]
-            all_pred_logits = [all_pred_logits[idx] for idx in range(num_decoder)]
+                for task_id, preds_dict in enumerate(preds_dicts, 0):
+                    for dec_id in range(num_decoder):
+                        pred_bbox = [preds_dict[0]['center'][i][dec_id], preds_dict[0]['height'][i][dec_id],
+                                    preds_dict[0]['dim'][i][dec_id], preds_dict[0]['rot'][i][dec_id]]
+                        if 'vel' in preds_dict[0]:
+                            pred_bbox.append(preds_dict[0]['vel'][i][dec_id])
+                        pred_bbox = torch.cat(pred_bbox, dim=-1)
+                        all_pred_bboxes[dec_id].append(pred_bbox)
+                        all_pred_logits[dec_id].append(preds_dict[0]['cls_logits'][i][dec_id])
+                all_pred_bboxes = [all_pred_bboxes[idx] for idx in range(num_decoder)]
+                all_pred_logits = [all_pred_logits[idx] for idx in range(num_decoder)]
 
-            loss_cls, loss_bbox = multi_apply(
-                self.loss_single, all_pred_bboxes, all_pred_logits,
-                [gt_bboxes_3d for _ in range(num_decoder)],
-                [gt_labels_3d for _ in range(num_decoder)],
-            )
+                loss_cls, loss_bbox = multi_apply(
+                    self.loss_single, all_pred_bboxes, all_pred_logits,
+                    [gt_bboxes_3d for _ in range(num_decoder)],
+                    [gt_labels_3d for _ in range(num_decoder)],
+                )
 
-            loss_dict[f'loss_cls_{modality}'] = loss_cls[-1]
-            loss_dict[f'loss_bbox_{modality}'] = loss_bbox[-1]
-            # for the purpose not to get loss (failure_pred)
-            if preds_dicts[0][0]['weight_list'] is not None:
-                loss_weight_f_list = []
-                for weight_list in preds_dicts[0][0]['weight_list']:
-                    weight_list = weight_list.squeeze(-1).transpose(0,1)
-                    # batch_size,_num_queries = weight_list.shape
-                    batch_size,_num_queries, _ = weight_list.shape
-                    weight_f_target = torch.tensor([i['modalmask'] for i in kwargs['img_metas']]).cuda()
-                    weight_f_target_expanded = weight_f_target.unsqueeze(1).repeat(1,_num_queries,1)
-                    loss_weight_f = self._criterion(weight_list,weight_f_target_expanded.float())/_num_queries
-                    # weight_f_target_expanded = torch.zeros(batch_size, _num_queries).cuda()
-                    # weight_f_target_expanded[weight_f_target[:, 0] == 1, :int(_num_queries/3)] = 1
-                    # weight_f_target_expanded[weight_f_target[:, 1] == 1, int(_num_queries/3):int(2*_num_queries/3)] = 1
-                    # weight_f_target_expanded[weight_f_target[:, 2] == 1, int(2*_num_queries/3):] = 1
-                    # loss_weight_f = F.binary_cross_entropy(weight_list, weight_f_target_expanded)
-                    loss_weight_f_list.append(loss_weight_f)
-                loss_dict[f'loss_weight_f_{modality}'] = sum(loss_weight_f_list)
+                loss_dict[f'loss_cls_{modality}'] = loss_cls[-1]
+                loss_dict[f'loss_bbox_{modality}'] = loss_bbox[-1]
 
-            num_dec_layer = 0
-            for loss_cls_i, loss_bbox_i in zip(loss_cls[:-1],
-                                               loss_bbox[:-1]):
-                loss_dict[f'd{num_dec_layer}.loss_cls_{modality}'] = loss_cls_i
-                loss_dict[f'd{num_dec_layer}.loss_bbox_{modality}'] = loss_bbox_i
-                num_dec_layer += 1
+                num_dec_layer = 0
+                for loss_cls_i, loss_bbox_i in zip(loss_cls[:-1],
+                                                loss_bbox[:-1]):
+                    loss_dict[f'd{num_dec_layer}.loss_cls_{modality}'] = loss_cls_i
+                    loss_dict[f'd{num_dec_layer}.loss_bbox_{modality}'] = loss_bbox_i
+                    num_dec_layer += 1
 
-            dn_pred_bboxes, dn_pred_logits = collections.defaultdict(list), collections.defaultdict(list)
-            dn_mask_dicts = collections.defaultdict(list)
-            for task_id, preds_dict in enumerate(preds_dicts, 0):
-                for dec_id in range(num_decoder):
-                    pred_bbox = [preds_dict[0]['dn_center'][i][dec_id], preds_dict[0]['dn_height'][i][dec_id],
-                                 preds_dict[0]['dn_dim'][i][dec_id], preds_dict[0]['dn_rot'][i][dec_id]]
-                    if 'vel' in preds_dict[0]:
-                        pred_bbox.append(preds_dict[0]['dn_vel'][i][dec_id])
-                    pred_bbox = torch.cat(pred_bbox, dim=-1)
-                    dn_pred_bboxes[dec_id].append(pred_bbox)
-                    dn_pred_logits[dec_id].append(preds_dict[0]['dn_cls_logits'][i][dec_id])
-                    dn_mask_dicts[dec_id].append(preds_dict[0]['dn_mask_dict'])
-            dn_pred_bboxes = [dn_pred_bboxes[idx] for idx in range(num_decoder)]
-            dn_pred_logits = [dn_pred_logits[idx] for idx in range(num_decoder)]
-            dn_mask_dicts = [dn_mask_dicts[idx] for idx in range(num_decoder)]
-            dn_loss_cls, dn_loss_bbox = multi_apply(
-                self.dn_loss_single, dn_pred_bboxes, dn_pred_logits, dn_mask_dicts
-            )
+                dn_pred_bboxes, dn_pred_logits = collections.defaultdict(list), collections.defaultdict(list)
+                dn_mask_dicts = collections.defaultdict(list)
+                for task_id, preds_dict in enumerate(preds_dicts, 0):
+                    for dec_id in range(num_decoder):
+                        pred_bbox = [preds_dict[0]['dn_center'][i][dec_id], preds_dict[0]['dn_height'][i][dec_id],
+                                    preds_dict[0]['dn_dim'][i][dec_id], preds_dict[0]['dn_rot'][i][dec_id]]
+                        if 'vel' in preds_dict[0]:
+                            pred_bbox.append(preds_dict[0]['dn_vel'][i][dec_id])
+                        pred_bbox = torch.cat(pred_bbox, dim=-1)
+                        dn_pred_bboxes[dec_id].append(pred_bbox)
+                        dn_pred_logits[dec_id].append(preds_dict[0]['dn_cls_logits'][i][dec_id])
+                        dn_mask_dicts[dec_id].append(preds_dict[0]['dn_mask_dict'])
+                dn_pred_bboxes = [dn_pred_bboxes[idx] for idx in range(num_decoder)]
+                dn_pred_logits = [dn_pred_logits[idx] for idx in range(num_decoder)]
+                dn_mask_dicts = [dn_mask_dicts[idx] for idx in range(num_decoder)]
+                dn_loss_cls, dn_loss_bbox = multi_apply(
+                    self.dn_loss_single, dn_pred_bboxes, dn_pred_logits, dn_mask_dicts
+                )
 
-            loss_dict[f'dn_loss_cls_{modality}'] = dn_loss_cls[-1]
-            loss_dict[f'dn_loss_bbox_{modality}'] = dn_loss_bbox[-1]
-            num_dec_layer = 0
-            for loss_cls_i, loss_bbox_i in zip(dn_loss_cls[:-1],
-                                               dn_loss_bbox[:-1]):
-                loss_dict[f'd{num_dec_layer}.dn_loss_cls_{modality}'] = loss_cls_i
-                loss_dict[f'd{num_dec_layer}.dn_loss_bbox_{modality}'] = loss_bbox_i
-                num_dec_layer += 1
+                loss_dict[f'dn_loss_cls_{modality}'] = dn_loss_cls[-1]
+                loss_dict[f'dn_loss_bbox_{modality}'] = dn_loss_bbox[-1]
+                num_dec_layer = 0
+                for loss_cls_i, loss_bbox_i in zip(dn_loss_cls[:-1],
+                                                dn_loss_bbox[:-1]):
+                    loss_dict[f'd{num_dec_layer}.dn_loss_cls_{modality}'] = loss_cls_i
+                    loss_dict[f'd{num_dec_layer}.dn_loss_bbox_{modality}'] = loss_bbox_i
+                    num_dec_layer += 1
+                    
+        if 'r_loss' in preds_dicts[0][0]:
+            loss_dict['r_loss'] = preds_dicts[0][0]['r_loss']
 
+        if 'qmod_sel_loss' in preds_dicts[0][0]:
+            loss_dict['qmod_sel_loss'] = preds_dicts[0][0]['qmod_sel_loss']
+            
+        # for the purpose not to get loss (failure_pred)
+        if 'weight_list' in preds_dicts[0][0] and preds_dicts[0][0]['weight_list'] is not None:
+            loss_weight_f_list = []
+            for weight_list in preds_dicts[0][0]['weight_list']:
+                weight_list = weight_list.squeeze(-1).transpose(0,1)
+                # batch_size,_num_queries = weight_list.shape
+                batch_size,_num_queries, _ = weight_list.shape
+                weight_f_target = torch.tensor([i['modalmask'] for i in kwargs['img_metas']]).cuda()
+                weight_f_target_expanded = weight_f_target.unsqueeze(1).repeat(1,_num_queries,1)
+                loss_weight_f = self._criterion(weight_list,weight_f_target_expanded.float())/_num_queries
+                # weight_f_target_expanded = torch.zeros(batch_size, _num_queries).cuda()
+                # weight_f_target_expanded[weight_f_target[:, 0] == 1, :int(_num_queries/3)] = 1
+                # weight_f_target_expanded[weight_f_target[:, 1] == 1, int(_num_queries/3):int(2*_num_queries/3)] = 1
+                # weight_f_target_expanded[weight_f_target[:, 2] == 1, int(2*_num_queries/3):] = 1
+                # loss_weight_f = F.binary_cross_entropy(weight_list, weight_f_target_expanded)
+                loss_weight_f_list.append(loss_weight_f)
+            loss_dict[f'loss_weight_f_{modality}'] = sum(loss_weight_f_list)
+        if 'loss_weight_f' in preds_dicts[0][0] and preds_dicts[0][0]['loss_weight_f'] is not None:
+            loss_dict[f'loss_weight_f_ensemble'] = preds_dicts[0][0]['loss_weight_f']
         return loss_dict
 
     @force_fp32(apply_to=('preds_dicts'))

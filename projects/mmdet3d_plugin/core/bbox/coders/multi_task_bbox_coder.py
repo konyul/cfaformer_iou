@@ -347,6 +347,8 @@ class MultiTaskBBoxCoder(BaseBBoxCoder):
         num_query = cls_scores.shape[0]
 
         cls_scores = cls_scores.sigmoid()
+        if cls_scores.shape[0]<max_num:
+            max_num = cls_scores.shape[0]
         scores, indexs = cls_scores.view(-1).topk(max_num)
         labels = indexs % self.num_classes
         bbox_index = indexs // self.num_classes

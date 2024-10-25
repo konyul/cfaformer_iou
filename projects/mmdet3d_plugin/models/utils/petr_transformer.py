@@ -205,7 +205,6 @@ class PETRMultiheadFlashAttention(BaseModule):
 
         self.attn = FlashMHA(embed_dims, num_heads, attn_drop, dtype=torch.float16, device='cuda',
                              **kwargs)
-
         self.proj_drop = nn.Dropout(proj_drop)
         self.dropout_layer = build_dropout(
             dropout_layer) if dropout_layer else nn.Identity()
@@ -288,7 +287,6 @@ class PETRMultiheadFlashAttention(BaseModule):
             query = query.transpose(0, 1)
             key = key.transpose(0, 1)
             value = value.transpose(0, 1)
-
         out = self.attn(
             q=query,
             k=key,
@@ -297,7 +295,6 @@ class PETRMultiheadFlashAttention(BaseModule):
 
         if self.batch_first:
             out = out.transpose(0, 1)
-
         return identity + self.dropout_layer(self.proj_drop(out))
 
 

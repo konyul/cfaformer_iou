@@ -45,8 +45,6 @@ train_pipeline = [
     ),
     dict(type='LoadMultiViewImageFromFiles'),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
-    dict(type='ModalMask3D',
-         mode='train'),
     dict(
         type='GlobalRotScaleTransAll',
         rot_range=[-0.3925 * 2, 0.3925 * 2],
@@ -73,7 +71,7 @@ train_pipeline = [
                     'img_norm_cfg', 'pcd_trans', 'sample_idx',
                     'pcd_scale_factor', 'pcd_rotation', 'pts_filename',
                     'transformation_3d_flow', 'rot_degree',
-                    'gt_bboxes_3d', 'gt_labels_3d', 'modalmask'))
+                    'gt_bboxes_3d', 'gt_labels_3d'))
 ]
 test_pipeline = [
     dict(
@@ -88,6 +86,10 @@ test_pipeline = [
         use_dim=[0, 1, 2, 3, 4],
     ),
     dict(type='LoadMultiViewImageFromFiles'),
+    dict(type='ModalMask3D',
+          mode= 'test',
+          mask_modal ='points'
+    ),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -111,8 +113,8 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=0,
+    samples_per_gpu=4,
+    workers_per_gpu=6,
     train=dict(
         type='CBGSDataset',
         dataset=dict(
@@ -265,8 +267,8 @@ model = dict(
             use_cam_embed=True,
             numq_per_modal=150,
             #  modal_seq=['bev', 'img', 'fused'],
-            locality_aware_failure_pred=True,
             modal_seq=['fused'],
+            locality_aware_failure_pred=True,
             encoder=dict(
                 type="PETRTransformerDecoder",
                 return_intermediate=True,
@@ -365,7 +367,7 @@ log_config = dict(
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = None
-load_from = 'ckpts/moad_voxel0075_vov_1600x640_cbgs.pth'
+load_from = 'ckpts/moad_voxel0075_vov.pth'
 resume_from = None
 workflow = [('train', 1)]
 gpu_ids = range(0, 8)

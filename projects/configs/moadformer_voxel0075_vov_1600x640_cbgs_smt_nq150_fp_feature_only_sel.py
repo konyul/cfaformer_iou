@@ -111,8 +111,9 @@ test_pipeline = [
         ])
 ]
 data = dict(
+    #samples_per_gpu=4,
     samples_per_gpu=2,
-    workers_per_gpu=0,
+    workers_per_gpu=6,
     train=dict(
         type='CBGSDataset',
         dataset=dict(
@@ -201,7 +202,6 @@ model = dict(
         hidden_dim=256,
         downsample_scale=8,
         pc_range=point_cloud_range,
-        use_ensemble=True,
         modalities=dict(
             train=["fused", "bev", "img"],
             test=["fused", "bev", "img"]
@@ -225,8 +225,36 @@ model = dict(
         separate_head=dict(
             type='SeparateTaskHead', init_bias=-2.19, final_kernel=1),
         transformer=dict(
-            type='MOADTransformer',
+            type='MOADTransformer_FP',
             use_cam_embed=True,
+            encoder=dict(
+                type="PETRTransformerDecoder",
+                return_intermediate=True,
+                num_layers=1, # same with len(ensemble.modal_seq)
+                transformerlayers=dict(
+                    type='PETRTransformerDecoderLayer',
+                    with_cp=False,
+                    attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            # type='PETRMultiheadFlashAttention',
+                            embed_dims=256,
+                            num_heads=8,
+                            dropout=0.1),
+                    ],
+                    ffn_cfgs=dict(
+                        type='FFN',
+                        embed_dims=256,
+                        feedforward_channels=1024,
+                        num_fcs=2,
+                        ffn_drop=0.,
+                        act_cfg=dict(type='ReLU', inplace=True),
+                    ),
+
+                    feedforward_channels=1024,
+                    operation_order=('cross_attn', 'norm', 'ffn', 'norm')
+                ),
+            ),
             decoder=dict(
                 type='PETRTransformerDecoder',
                 return_intermediate=True,
@@ -259,43 +287,6 @@ model = dict(
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
                                      'ffn', 'norm')),
             ),
-        ),
-        ensemble=dict(
-            type='CFATransformer',
-            use_cam_embed=True,
-            numq_per_modal=150,
-            #  modal_seq=['bev', 'img', 'fused'],
-            locality_aware_failure_pred=True,
-            modal_seq=['fused'],
-            encoder=dict(
-                type="PETRTransformerDecoder",
-                return_intermediate=True,
-                num_layers=1, # same with len(ensemble.modal_seq)
-                transformerlayers=dict(
-                    type='PETRTransformerDecoderLayer',
-                    with_cp=False,
-                    attn_cfgs=[
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=256,
-                            num_heads=8,
-                            dropout=0.1),
-                    ],
-                    ffn_cfgs=dict(
-                        type='FFN',
-                        embed_dims=256,
-                        feedforward_channels=1024,
-                        num_fcs=2,
-                        ffn_drop=0.,
-                        act_cfg=dict(type='ReLU', inplace=True),
-                    ),
-
-                    feedforward_channels=1024,
-                    operation_order=('cross_attn', 'norm', 'ffn', 'norm')
-                ),
-            ),
-            separate_head=dict(
-                type='SeparateTaskHead', init_bias=-2.19, final_kernel=1),
         ),
         loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2, alpha=0.25, reduction='mean', loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', reduction='mean', loss_weight=0.25)
@@ -366,6 +357,7 @@ dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = None
 load_from = 'ckpts/moad_voxel0075_vov_1600x640_cbgs.pth'
+# load_from = 'work_dirs/fp_feature/20241018-152448/epoch_3.pth'
 resume_from = None
 workflow = [('train', 1)]
 gpu_ids = range(0, 8)
@@ -373,7 +365,7 @@ gpu_ids = range(0, 8)
 custom_hooks = [
     dict(
         type="FreezeWeight",
-        finetune_weight=["pts_bbox_head.ensemble"]
+        finetune_weight=["pts_bbox_head.transformer.encoder", "pts_bbox_head.transformer.selected_cls"]
     )
 ]
 

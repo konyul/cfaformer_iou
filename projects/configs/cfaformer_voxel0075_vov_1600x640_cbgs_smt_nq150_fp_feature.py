@@ -111,8 +111,8 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=0,
+    samples_per_gpu=4,
+    workers_per_gpu=6,
     train=dict(
         type='CBGSDataset',
         dataset=dict(
@@ -265,8 +265,8 @@ model = dict(
             use_cam_embed=True,
             numq_per_modal=150,
             #  modal_seq=['bev', 'img', 'fused'],
-            locality_aware_failure_pred=True,
             modal_seq=['fused'],
+            locality_aware_failure_pred=True,
             encoder=dict(
                 type="PETRTransformerDecoder",
                 return_intermediate=True,
@@ -366,6 +366,7 @@ dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = None
 load_from = 'ckpts/moad_voxel0075_vov_1600x640_cbgs.pth'
+# load_from = 'work_dirs/fp_feature/20241018-152448/epoch_3.pth'
 resume_from = None
 workflow = [('train', 1)]
 gpu_ids = range(0, 8)

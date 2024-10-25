@@ -68,7 +68,7 @@ class MOADTransformer(BaseModule):
         self._is_init = True
 
     def forward(self, x, x_img, bev_query_embed, rv_query_embed, bev_pos_embed, rv_pos_embed, img_metas,
-                attn_masks=None, modalities=None, reg_branch=None):
+                attn_masks=None, modalities=None, reg_branch=None, ref_points=None, pc_range=None):
         bs, c, h, w = x.shape
         bev_memory = rearrange(x, "bs c h w -> (h w) bs c")  # [bs, n, c, h, w] -> [n*h*w, bs, c]
         rv_memory = rearrange(x_img, "(bs v) c h w -> (v h w) bs c", bs=bs)

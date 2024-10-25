@@ -46,20 +46,36 @@ class CFATransformer(BaseModule):
 
         if encoder is not None:
             self.encoder = build_transformer_layer_sequence(encoder)
+            self.num_heads = encoder["transformerlayers"]["attn_cfgs"][0]["num_heads"]
+            self.embed_dims = self.encoder.embed_dims
         else:
             self.encoder = None
-        self.decoder = build_transformer_layer_sequence(decoder)
-        self.embed_dims = self.decoder.embed_dims
+        if decoder is not None:
+            self.decoder = build_transformer_layer_sequence(decoder)
+            self.num_heads = decoder["transformerlayers"]["attn_cfgs"][0]["num_heads"]
+            self.embed_dims = self.decoder.embed_dims
+            assert len(self.modal_seq) == self.decoder.num_layers, 'cfa modal_seq must same with decoder.num_layers'
+            self.use_self_attn = 'self_attn' in self.decoder.layers[0].operation_order
+            if self.use_self_attn:
+                self.dist_scaler = nn.Parameter(torch.randn(1), requires_grad=True)
+                self.dist_bias = nn.Parameter(torch.randn(1), requires_grad=True)
+            # for KV
+            self.task_heads = nn.ModuleList()
+            for num_cls in num_classes:
+                heads = copy.deepcopy(heads)
+                heads.update(dict(cls_logits=(num_cls, 2)))
+                separate_head.update(
+                    in_channels=self.embed_dims,
+                    heads=heads, num_cls=num_cls,
+                    groups=decoder.num_layers
+                )
+                self.task_heads.append(builder.build_head(separate_head))
+        else:
+            self.decoder = None
         self.use_type_embed = use_type_embed
         self.use_cam_embed = use_cam_embed
         self.modal_seq = modal_seq
-        assert len(self.modal_seq) == self.decoder.num_layers, 'cfa modal_seq must same with decoder.num_layers'
 
-        self.use_self_attn = 'self_attn' in self.decoder.layers[0].operation_order
-        if self.use_self_attn:
-            self.dist_scaler = nn.Parameter(torch.randn(1), requires_grad=True)
-            self.dist_bias = nn.Parameter(torch.randn(1), requires_grad=True)
-            self.num_heads = decoder["transformerlayers"]["attn_cfgs"][0]["num_heads"]
         if self.use_type_embed:
             self.bev_type_embed = nn.Parameter(torch.randn(self.embed_dims))
             self.rv_type_embed = nn.Parameter(torch.randn(self.embed_dims))
@@ -96,17 +112,7 @@ class CFATransformer(BaseModule):
                                 'bev': nn.Parameter(torch.Tensor(embed_dims)).cuda(),
                                 'img': nn.Parameter(torch.Tensor(embed_dims)).cuda()}
 
-        # for KV
-        self.task_heads = nn.ModuleList()
-        for num_cls in num_classes:
-            heads = copy.deepcopy(heads)
-            heads.update(dict(cls_logits=(num_cls, 2)))
-            separate_head.update(
-                in_channels=self.embed_dims,
-                heads=heads, num_cls=num_cls,
-                groups=decoder.num_layers
-            )
-            self.task_heads.append(builder.build_head(separate_head))
+        
 
         # for Q
         self.modality_proj = nn.ModuleDict({
@@ -130,6 +136,7 @@ class CFATransformer(BaseModule):
         )
         self.failure_pred = failure_pred
         self.locality_aware_failure_pred = locality_aware_failure_pred
+        self.selected_cls = nn.Linear(256, 3)
 
     def init_weights(self):
         # follow the official DETR to init parameters
@@ -215,28 +222,39 @@ class CFATransformer(BaseModule):
                 ca_dict,
                 task_id,
                 pad_size,
+                training,
                 attn_masks=None,
                 reg_branch=None):
         # prepare Q (camera+lidar+fused object query)
         # [-1] due to return_intermediate
+        
         outs_dec = outs_dec[-1].transpose(0, 1)
+        # outs_dec = outs_dec[0].transpose(0, 1)
+        
         outs_dec = list(outs_dec.split(num_queries_per_modality, dim=0))
         x_proj = []
 
         for i, modality in enumerate(self.query_modal_types):
             x_proj.append(self.modality_proj[modality](outs_dec[i]))
         # select k query from each modal queries
+        
         cls_scores = outs['cls_logits'][-1].sigmoid()
+        # cls_scores = outs['cls_logits'][0].sigmoid()
+        
         cls_scores = list(cls_scores.split(num_queries_per_modality, dim=1))
+        
         center = outs["center"][-1]
         height = outs["height"][-1]
-        height = list(height.split(num_queries_per_modality, dim=1))    
         dim = outs["dim"][-1]
+        # center = outs["center"][0]
+        # height = outs["height"][0]
+        # dim = outs["dim"][0]
+        
+        height = list(height.split(num_queries_per_modality, dim=1))    
         dim = list(dim.split(num_queries_per_modality, dim=1))    
         center = list(center.split(num_queries_per_modality, dim=1))
         reference = list(reference.split(num_queries_per_modality, dim=1))
         center_top, height_top, dim_top, x_proj_top, ref_top, mq_idx_top = [], [], [], [], [], []
-
         for i, modality in enumerate(self.query_modal_types):
             center_t, height_t, dim_t, x_proj_t, ref_t, q_idx = self.select_top_queries(cls_scores[i], center[i], height[i], dim[i], x_proj[i], reference[i], num_queries_per_modality, pad_size)
             if self.modal_embedding:
@@ -246,6 +264,7 @@ class CFATransformer(BaseModule):
             dim_top.append(dim_t)
             x_proj_top.append(x_proj_t)
             ref_top.append(ref_t)
+            q_idx = q_idx + i*num_queries_per_modality[0]
             mq_idx_top.append(q_idx)
 
         target = torch.cat(x_proj_top, dim=0)
@@ -260,56 +279,7 @@ class CFATransformer(BaseModule):
         query_box_pos_embed = self.box_pos_embedding(box_pos_embed).transpose(0, 1)
 
         attn_masks_in = [None]
-        if self.use_self_attn:
-            center_q = center.clone()
-            center_kv = center.clone()
-            dist = (center_q.unsqueeze(2) - center_kv.unsqueeze(1)).norm(p=2, dim=-1)
-            batch_size, num_queries, _ = dist.shape
-            num_modalities = 3
-            queries_per_modality = num_queries // num_modalities
-            
-            # # # 마스크 초기화 (모든 값을 0으로 설정)
-            # mask = torch.eye(num_queries,dtype=torch.float).unsqueeze(0).expand(batch_size,-1,-1).cuda()
-            
-            # for batch in range(batch_size):
-            #     for src_query in range(num_queries):
-            #         src_modality = src_query//queries_per_modality
-            #         for tgt_modality in range(num_modalities):
-            #             if src_modality != tgt_modality:
-            #                 tgt_start = tgt_modality * queries_per_modality
-            #                 tgt_end = (tgt_modality + 1) * queries_per_modality
-            #                 distances = dist[batch, src_query, tgt_start:tgt_end]
-            #                 nearest_center = distances.argmin().item() + tgt_start
-            #                 # 마스크 업데이트
-            #                 mask[batch, src_query, nearest_center] = 1.0
-            # mask_clone = mask.clone()
-
-            # 모달리티 인덱스 및 마스크 생성
-
-            src_modality = torch.arange(num_queries).unsqueeze(0).cuda() // queries_per_modality # modality index 1,450
-            tgt_modality = torch.arange(num_modalities).unsqueeze(0).cuda() # modality index 1,3
-            diff_modality = (src_modality.unsqueeze(-1) != tgt_modality).expand(batch_size, -1, -1)
-            # 가장 가까운 센터 찾기
-            nearest_centers = dist.view(batch_size, num_queries, num_modalities, -1).argmin(dim=-1)
-            nearest_centers += tgt_modality * queries_per_modality
-            # 마스크 생성 및 업데이트
-            dist_mask = torch.zeros_like(dist).cuda()
-            dist_mask[torch.arange(batch_size).unsqueeze(-1).unsqueeze(-1),torch.arange(num_queries).unsqueeze(0).unsqueeze(-1),nearest_centers] = diff_modality.float()
-            # 대각선 요소 설정
-            dist_mask.diagonal(dim1=1, dim2=2).fill_(1.0)
-            dist_mask = ~dist_mask.bool() # if float mask then mask is added
-            # attn_masks = torch.zeros((target.shape[0], target.shape[0]), dtype=torch.bool, device=target.device)
-            # attn_masks = torch.zeros_like(attn_masks, dtype=torch.float).float().masked_fill(attn_masks, float("-inf"))
-            # attn_masks = attn_masks + dist_mask
-            attn_masks = dist_mask
-            attn_masks = attn_masks.unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1)
-            attn_masks_in = [attn_masks, None]
-
-        if self.modal_embedding:
-            for idx, modal in enumerate(['fused', 'bev', 'img']):
-                ca_dict['memory_l'][idx] = ca_dict['memory_l'][idx] + self.modal_embed[modal].view(1, 1, -1)
-                ca_dict['memory_v_l'][idx] = ca_dict['memory_l'][idx] + self.modal_embed[modal].view(1, 1, -1)
-        
+       
         if self.locality_aware_failure_pred:
             _position = torch.cat([center.clone(), height.clone()],dim=-1)
             _matrices = np.stack([np.stack(i['lidar2img']) for i in img_metas])
@@ -391,10 +361,9 @@ class CFATransformer(BaseModule):
                 visualize_img(pts_pers, img_metas, 3, '3')
                 visualize_img(pts_pers, img_metas, 4, '4')
                 visualize_img(pts_pers, img_metas, 5, '5')
-        
-            pts_pers[:,:,1:] = torch.floor(pts_pers[:,:,1:]*ratio)
+            pts_pers[:,:,1:] = torch.floor(pts_pers[:,:,1:]*ratio) # H,W
             pts_pers[pts_pers[:,:,0]==-1] = 0.0
-            pts_bev = torch.floor((center + 54.0) * (180 / 108))[:,:,[1,0]] # feature dim = y,x-> change center coordinates to y,x
+            pts_bev = torch.floor((center + 54.0) * (180 / 108))[:,:,[1,0]] # feature dim = x,y -> change center coordinates to y,x
             pts_idx = pts_bev[:,:,0]*180+pts_bev[:,:,1]
             
             # camera attn mask
@@ -420,7 +389,7 @@ class CFATransformer(BaseModule):
             index_rows = (indices % (H * W)) // W
             index_cols = indices % W
 
-            # 행과 열 유효성 체크
+            # 행과 열 유효성 체크 filter patches on other views
             valid_row = (index_rows - query_rows.unsqueeze(-1)).abs() <= window_size // 2
             valid_column = (index_cols - query_cols.unsqueeze(-1)).abs() <= window_size // 2
 
@@ -446,7 +415,7 @@ class CFATransformer(BaseModule):
             batch_size, num_queries = pts_idx.shape
             total_elements = 180*180
             row_stride = 180
-            window_size = 15
+            window_size = 5
             offsets = torch.arange(-(window_size // 2), window_size // 2 + 1).cuda()
             y_offsets, x_offsets = torch.meshgrid(offsets, offsets)
             window_offsets = (y_offsets * row_stride + x_offsets).reshape(-1)
@@ -471,10 +440,35 @@ class CFATransformer(BaseModule):
                 query_indices_range[valid_mask],
                 indices[valid_mask].long()
             ] = False
-            fusion_attention_mask = torch.cat([lidar_attention_mask,img_attention_mask],dim=-1)
-            attn_masks_in = [[fusion_attention_mask, lidar_attention_mask, img_attention_mask],None]
-            
-        if self.failure_pred or self.locality_aware_failure_pred:
+            fusion_attention_mask = torch.cat([lidar_attention_mask, img_attention_mask], dim=-1)
+            fusion_attention_mask = fusion_attention_mask.unsqueeze(1).repeat(1,self.num_heads,1,1).flatten(0,1)
+            # fusion_attention_mask = torch.ones(fusion_attention_mask.shape).bool().cuda()
+        
+        if self.locality_aware_failure_pred:
+            target = self.encoder(
+                query=target,
+                key=ca_dict['memory_l'][0],
+                value=ca_dict['memory_v_l'][0],
+                query_pos=query_box_pos_embed,
+                key_pos=ca_dict['pos_embed_l'][0],
+                attn_masks=[fusion_attention_mask],
+                reg_branch=reg_branch
+            )
+            target = target.squeeze(0).transpose(1,0)
+            batch_size,_num_queries, num_dims = target.shape
+            target = target.reshape(-1, num_dims)
+            target = self.selected_cls(target)
+            if training:
+                weight_f_target = torch.tensor([i['modalmask'] for i in img_metas]).cuda()
+                weight_f_target_expanded = weight_f_target.unsqueeze(1).repeat(1,_num_queries,1)
+                weight_f_target_expanded = weight_f_target_expanded.reshape(-1, 3)
+                self._criterion = nn.CrossEntropyLoss()
+                loss_weight_f = self._criterion(target, weight_f_target_expanded.float())
+            else:
+                loss_weight_f = None
+                    
+        
+        if self.failure_pred:
             target, weight_list = self.decoder(
                 query=target,
                 key=ca_dict['memory_l'],
@@ -487,7 +481,7 @@ class CFATransformer(BaseModule):
                 failure_pred=self.failure_pred,
                 locality_aware_failure_pred=self.locality_aware_failure_pred
             )
-        else:
+        if self.decoder is not None:
             target = self.decoder(
                 query=target,
                 key=ca_dict['memory_l'],
@@ -501,20 +495,21 @@ class CFATransformer(BaseModule):
                 locality_aware_failure_pred=self.locality_aware_failure_pred
             )
             weight_list = None
-            
-        target, center = self.permute_dn(target.squeeze(0), 0), self.permute_dn(center, 1)
-        target = target.unsqueeze(0)
-        reference, mq_idx = self.permute_dn(reference, 1), self.permute_dn(mq_idx, 1)
-        target = target.transpose(1, 2)
-        outs = self.task_heads[task_id](target)
+            target, center = self.permute_dn(target.squeeze(0), 0), self.permute_dn(center, 1)
+            target = target.unsqueeze(0)
+            reference, mq_idx = self.permute_dn(reference, 1), self.permute_dn(mq_idx, 1)
+            target = target.transpose(1, 2)
+            outs = self.task_heads[task_id](target)
 
-        center = (outs['center'] + reference[None, :, :, :2]).sigmoid()
-        height = (outs['height'] + reference[None, :, :, 2:3]).sigmoid()
-        _center, _height = center.new_zeros(center.shape), height.new_zeros(height.shape)
-        _center[..., 0:1] = center[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
-        _center[..., 1:2] = center[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
-        _height[..., 0:1] = height[..., 0:1] * (pc_range[5] - pc_range[2]) + pc_range[2]
-        outs['center'] = _center
-        outs['height'] = _height
+            center = (outs['center'] + reference[None, :, :, :2]).sigmoid()
+            height = (outs['height'] + reference[None, :, :, 2:3]).sigmoid()
+            _center, _height = center.new_zeros(center.shape), height.new_zeros(height.shape)
+            _center[..., 0:1] = center[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+            _center[..., 1:2] = center[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+            _height[..., 0:1] = height[..., 0:1] * (pc_range[5] - pc_range[2]) + pc_range[2]
+            outs['center'] = _center
+            outs['height'] = _height
 
-        return outs, mq_idx, weight_list
+            return outs, mq_idx, weight_list, loss_weight_f, target
+        else:
+            return outs, mq_idx, None, loss_weight_f, target
