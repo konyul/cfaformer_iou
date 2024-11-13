@@ -268,16 +268,17 @@ model = dict(
             encoder=dict(
                 type="PETRTransformerDecoder",
                 return_intermediate=True,
-                num_layers=3, # same with len(ensemble.modal_seq)
+                num_layers=1, # same with len(ensemble.modal_seq)
                 transformerlayers=dict(
                     type='PETRTransformerDecoderLayer',
                     with_cp=False,
                     attn_cfgs=[
                         dict(
-                            # type='MultiheadAttention',
-                            type='PETRMultiheadFlashAttention',
+                            type='MultiheadAttention',
+                            # type='PETRMultiheadFlashAttention',
                             embed_dims=256,
-                            num_heads=8,
+                            # num_heads=8,
+                            num_heads=4,
                             dropout=0.1),
                     ],
                     ffn_cfgs=dict(

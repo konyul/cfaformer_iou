@@ -15,6 +15,8 @@ from projects.mmdet3d_plugin import SPConvVoxelization
 from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
 import numpy as np
 import cv2
+import matplotlib.pyplot as plt
+from mmdet3d.core.visualizer.image_vis import draw_lidar_bbox3d_on_img
 @DETECTORS.register_module()
 class MEFormerDetector(MVXTwoStageDetector):
     def __init__(self,
@@ -28,6 +30,7 @@ class MEFormerDetector(MVXTwoStageDetector):
         self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         if pts_voxel_cfg:
             self.pts_voxel_layer = SPConvVoxelization(**pts_voxel_cfg)
+        self.count = 0
 
     def init_weights(self):
         """Initialize model weights."""
@@ -214,11 +217,136 @@ class MEFormerDetector(MVXTwoStageDetector):
             if not isinstance(var, list):
                 raise TypeError('{} must be a list, but got {}'.format(
                     name, type(var)))
-
         return self.simple_test(points[0], img_metas[0], img[0], **kwargs)
+        
+    def visualize_img(self, gt_bboxes_3d, bbox_results, gt_labels, failure_case, img_metas, thickness=3):
+        num_object = gt_bboxes_3d[0][0].tensor.shape[0]
+        pred_boxes = bbox_results[0]['boxes_3d'][:num_object]
+        scores = bbox_results[0]['scores_3d'][:num_object]
+        gt_boxes = gt_bboxes_3d[0][0]
+        gt_labels = gt_labels[0][0]
+        labels = bbox_results[0]['labels_3d'][:num_object]
+        def viz_view_img(img, std, mean, _matrices, img_metas, pred_boxes, gt_boxes, color=labels, idx=None, thickness=3):
+            img = img.cpu().permute(1,2,0).numpy()
+            denormalized_image = img * std + mean
+            img = np.clip(denormalized_image, 0, 255).astype(np.uint8)
+            # nuscenes colormap만 추가
+            pred_img = draw_lidar_bbox3d_on_img(pred_boxes, img.copy(), _matrices, img_metas, color=labels, thickness=thickness)
+            
+            count = str(self.count).zfill(6) 
+            cv2.imwrite(f"vis_img_{failure_case}/{count}_{idx}.png",pred_img)
+            gt_img = draw_lidar_bbox3d_on_img(gt_boxes, img.copy(), _matrices, img_metas, color=gt_labels)
+            # cv2.imwrite(f"vis_img/{count}_gt.png",gt_img)
 
+        img = img_metas['img']
+        _matrices = np.stack(img_metas['lidar2img'])
+        _matrices = torch.tensor(_matrices).float()
+        mean=[103.530, 116.280, 123.675]
+        std=[57.375, 57.120, 58.395]
+        mean = torch.tensor(mean).view(1, 1, 3).numpy()
+        std = torch.tensor(std).view(1, 1, 3).numpy()
+        cam_order=['CAM_FRONT','CAM_FRONT_RIGHT','CAM_FRONT_LEFT','CAM_BACK','CAM_BACK_RIGHT','CAM_BACK_LEFT']
+        for i in range(6):
+            viz_view_img(img[i],std,mean,_matrices[i],img_metas, pred_boxes, gt_boxes, labels, cam_order[i], thickness=thickness)
+
+    def visualize_bev(self, points, gt_bboxes_3d, bbox_results, gt_labels, failure_case):
+        num_object = gt_bboxes_3d[0][0].tensor.shape[0]
+        pred_boxes = bbox_results[0]['boxes_3d'].tensor[:num_object].cpu()
+        scores = bbox_results[0]['scores_3d'][:num_object].cpu()
+        gt_boxes = gt_bboxes_3d[0][0].tensor.cpu()
+        gt_labels = gt_labels[0][0]
+        labels = bbox_results[0]['labels_3d'][:num_object]
+        points = points[0]
+        point_cloud = points[points[:,-1]==0].cpu()
+        
+        def create_plot():
+            fig, ax = plt.subplots(figsize=(15, 15))
+            ax.set_xlim([-40, 40])
+            ax.set_ylim([-60, 60])
+            
+            # Plot point cloud
+            distances = np.sqrt(point_cloud[:, 0]**2 + point_cloud[:, 1]**2)
+            max_dist = 60
+            norm = plt.Normalize(0, max_dist)
+            colors = plt.cm.RdYlBu_r(norm(distances))
+            colors[:]=0
+            ax.scatter(point_cloud[:, 0], point_cloud[:, 1], s=1, c=colors, alpha=1)
+            
+            return fig, ax
+        
+        def get_color(label_id):
+            colormap = {
+                0: 'darkorange',      # car
+                1: 'coral',           # truck
+                2: 'orange',          # cv
+                3: 'sandybrown',      # bus
+                4: 'peachpuff',       # trailer
+                5: 'tan',             # barrier
+                6: 'darkred',         # motorcycle
+                7: 'red',             # bicycle
+                8: 'blue',            # pedestrian
+                9: 'yellow'           # traffic_cone
+            }
+            return colormap.get(int(label_id), 'green')
+        
+        # Visualize Ground Truth
+        fig_gt, ax_gt = create_plot()
+        ax_gt.set_title('Ground Truth', fontsize=16)
+        
+        for idx, (box, _label) in enumerate(zip(gt_boxes, gt_labels)):
+            x, y, _, l, w, _, rot = box[:7].numpy()
+            rot = -rot
+            box_points = np.array([[l/2, w/2], [l/2, -w/2], [-l/2, -w/2], [-l/2, w/2], [l/2, w/2]])
+            rotation_matrix = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+            box_points = np.dot(box_points, rotation_matrix)
+            box_points += np.array([x, y])
+            
+            color = get_color(_label)
+            ax_gt.plot(box_points[:, 0], box_points[:, 1], c=color, linewidth=2)
+        
+        ax_gt.set_aspect('equal')
+        plt.tight_layout()
+        count = str(self.count).zfill(6)
+        # plt.savefig(f"vis_pts/{count}_gt.png", bbox_inches='tight', dpi=300)
+        plt.close()
+        
+        # Visualize Predictions
+        fig_pred, ax_pred = create_plot()
+        ax_pred.set_title('Predictions', fontsize=16)
+        
+        def get_marker_style(idx):
+            if idx < 10:  # Fusion
+                return {'marker': 'o', 'markersize': 10}  
+            elif idx < 20:  # LiDAR
+                return {'marker': 's', 'markersize': 8}   
+            else:  # Camera
+                return {'marker': '^', 'markersize': 8}   
+        
+        # Add legend for prediction types
+        ax_pred.plot([], [], c='indianred', linewidth=2, label='Fusion')
+        ax_pred.plot([], [], c='indianred', linewidth=2, label='LiDAR')
+        ax_pred.plot([], [], c='orange', linewidth=2, label='Camera')
+        
+        for idx, (box, score, label) in enumerate(zip(pred_boxes, scores, labels)):
+            x, y, _, l, w, _, rot = box[:7].numpy()
+            rot = -rot
+            box_points = np.array([[l/2, w/2], [l/2, -w/2], [-l/2, -w/2], [-l/2, w/2], [l/2, w/2]])
+            rotation_matrix = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+            box_points = np.dot(box_points, rotation_matrix)
+            box_points += np.array([x, y])
+            
+            color = get_color(label)
+            marker_style = get_marker_style(idx)
+            
+            ax_pred.plot(box_points[:, 0], box_points[:, 1], c=color, linewidth=2)
+        
+        ax_pred.set_aspect('equal')
+        ax_pred.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        plt.savefig(f"vis_pts_{failure_case}/{count}.png", bbox_inches='tight', dpi=300)
+        plt.close()
     @force_fp32(apply_to=('x', 'x_img'))
-    def simple_test_pts(self, x, x_img, img_metas, rescale=False, gt_bboxes_3d=None, gt_labels_3d=None):
+    def simple_test_pts(self, points, x, x_img, img_metas, rescale=False, gt_bboxes_3d=None, gt_labels_3d=None):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, x_img, img_metas)
         bbox_list = self.pts_bbox_head.get_bboxes(
@@ -228,11 +356,18 @@ class MEFormerDetector(MVXTwoStageDetector):
             bbox3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list
         ]
+        if False:
+            failure_case = 'lidar_drop'
+            self.visualize_bev(points, gt_bboxes_3d, bbox_results, gt_labels_3d, failure_case)
+            self.visualize_img(gt_bboxes_3d, bbox_results, gt_labels_3d, failure_case, img_metas[0])
+        self.count+=1
         return bbox_results
 
     def simple_test(self, points, img_metas, img=None, rescale=False, gt_bboxes_3d=None, gt_labels_3d=None):
         img_feats, pts_feats = self.extract_feat(
             points, img=img, img_metas=img_metas)
+        img_metas[0]['img'] = img
+        img_metas[0]['gt_bboxes_3d'] = gt_bboxes_3d
         if pts_feats is None:
             pts_feats = [None]
         if img_feats is None:
@@ -240,7 +375,7 @@ class MEFormerDetector(MVXTwoStageDetector):
         bbox_list = [dict() for i in range(len(img_metas))]
         if (pts_feats or img_feats) and self.with_pts_bbox:
             bbox_pts = self.simple_test_pts(
-                pts_feats, img_feats, img_metas, rescale=rescale, gt_bboxes_3d=gt_bboxes_3d, gt_labels_3d=gt_labels_3d)
+                points, pts_feats, img_feats, img_metas, rescale=rescale, gt_bboxes_3d=gt_bboxes_3d, gt_labels_3d=gt_labels_3d)
             for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
                 result_dict['pts_bbox'] = pts_bbox
         if img_feats and self.with_img_bbox:

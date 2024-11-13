@@ -22,6 +22,7 @@ from mmdet3d.models import builder
 from projects.mmdet3d_plugin.models.dense_heads.meformer_head import pos2embed
 import cv2
 import matplotlib.pyplot as plt
+from .deformable_transformer import build_deforamble_transformer
 @TRANSFORMER.register_module()
 class CFATransformer(BaseModule):
     def __init__(
@@ -137,6 +138,7 @@ class CFATransformer(BaseModule):
         self.failure_pred = failure_pred
         self.locality_aware_failure_pred = locality_aware_failure_pred
         self.selected_cls = nn.Linear(256, 3)
+        # self.deform_model = build_deforamble_transformer()
 
     def init_weights(self):
         # follow the official DETR to init parameters
@@ -443,7 +445,15 @@ class CFATransformer(BaseModule):
             fusion_attention_mask = torch.cat([lidar_attention_mask, img_attention_mask], dim=-1)
             fusion_attention_mask = fusion_attention_mask.unsqueeze(1).repeat(1,self.num_heads,1,1).flatten(0,1)
             # fusion_attention_mask = torch.ones(fusion_attention_mask.shape).bool().cuda()
-        
+        ## deform attn
+        # masks = torch.zeros(
+        #             (target.shape[1],56400),
+        #             dtype=torch.bool,
+        #             device=target.device,
+        #         )
+        # pos_embeds = ca_dict['pos_embed_l'][0]
+        # target = self.deform_model([ca_dict['memory_v_l'][0].transpose(1,0)], [masks], [pos_embeds.transpose(1,0)], [target.transpose(1,0)], query_box_pos_embed)
+        # target = target[-1] #torch.Size([4, 450, 256])
         if self.locality_aware_failure_pred:
             target = self.encoder(
                 query=target,

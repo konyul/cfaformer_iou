@@ -14,7 +14,7 @@ python -m torch.distributed.launch \
     --node_rank=$NODE_RANK \
     --master_addr=$MASTER_ADDR \
     --nproc_per_node=$GPUS \
-    --master_port=23222 \
+    --master_port=21133 \
     $(dirname "$0")/test.py \
     $CONFIG \
     $CHECKPOINT \

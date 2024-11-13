@@ -133,6 +133,7 @@ test_pipeline = [
         with_bbox_3d = True,
         with_label_3d = True
     ),
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(
         type= 'Randomdropforeground',
         object_failure = True
@@ -157,7 +158,7 @@ test_pipeline = [
                 type='DefaultFormatBundle3D',
                 class_names=class_names,
                 with_label=False),
-            dict(type='Collect3D', keys=['points', 'img'])
+            dict(type='Collect3D', keys=['points', 'img','gt_bboxes_3d', 'gt_labels_3d'])
         ])
 ]
 data = dict(

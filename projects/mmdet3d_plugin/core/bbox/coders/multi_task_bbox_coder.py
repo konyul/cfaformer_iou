@@ -353,6 +353,7 @@ class MultiTaskBBoxCoder(BaseBBoxCoder):
         labels = indexs % self.num_classes
         bbox_index = indexs // self.num_classes
         task_index = torch.gather(task_ids, 1, labels.unsqueeze(1)).squeeze()
+        # scores, labels = cls_scores.max(-1)
 
         bbox_preds = bbox_preds[task_index * num_query + bbox_index]
         boxes3d = denormalize_bbox(bbox_preds, self.pc_range)

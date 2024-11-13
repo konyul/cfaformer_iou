@@ -17,8 +17,8 @@ from mmcv.cnn import xavier_init
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
 from mmcv.runner.base_module import BaseModule
 from mmdet.models.utils.builder import TRANSFORMER
-
-
+import matplotlib.pyplot as plt
+import cv2
 @TRANSFORMER.register_module()
 class MOADTransformer_FP(BaseModule):
     def __init__(
@@ -82,10 +82,16 @@ class MOADTransformer_FP(BaseModule):
         batch, _num_queries, _ =  _position.shape
         
         if False: # gt visualize
-            _position = img_metas[0]['gt_bboxes_3d']._data.tensor[:,:3].unsqueeze(0).cuda()
-            _position[:,:,-1] += img_metas[0]['gt_bboxes_3d']._data.tensor[:,5].unsqueeze(0).cuda()*0.5
-            batch, _num_queries,_ = img_metas[0]['gt_bboxes_3d']._data.tensor[:,:3].unsqueeze(0).shape
-            _matrices = _matrices[0:1]
+            if not self.training:
+                _position = img_metas[0]['gt_bboxes_3d'][0][0].tensor[:,:3].unsqueeze(0).cuda()
+                _position[:,:,-1] += img_metas[0]['gt_bboxes_3d'][0][0].tensor[:,5].unsqueeze(0).cuda()*0.5
+                batch, _num_queries,_ = img_metas[0]['gt_bboxes_3d'][0][0].tensor[:,:3].unsqueeze(0).shape
+                _matrices = _matrices[0:1]
+            else:
+                _position = img_metas[0]['gt_bboxes_3d']._data.tensor[:,:3].unsqueeze(0).cuda()
+                _position[:,:,-1] += img_metas[0]['gt_bboxes_3d']._data.tensor[:,5].unsqueeze(0).cuda()*0.5
+                batch, _num_queries,_ = img_metas[0]['gt_bboxes_3d']._data.tensor[:,:3].unsqueeze(0).shape
+                _matrices = _matrices[0:1]
         
         _position_4d = torch.cat([_position, torch.ones((batch, _num_queries, 1)).cuda()], dim=-1)
         
@@ -120,11 +126,13 @@ class MOADTransformer_FP(BaseModule):
         ratio = torch.tensor(feat_H/ori_H)
         pts_pers = torch.cat([first_valid_view.unsqueeze(-1),pts_pers],dim=-1)
         
-        
         if False: # visualize
             def visualize_img(pts_pers, img_metas, cam_view=0, idx='0'):
                 imgfov_pts_2d = pts_pers[:1,:,:][pts_pers[:1,:,0]==cam_view][:,1:][:,[1,0]] # W, H
-                img = img_metas[0]['img'][0][cam_view].permute(1,2,0).cpu().numpy()
+                if not self.training:
+                    img = img_metas[0]['img'][cam_view].permute(1,2,0).cpu().numpy()
+                else:    
+                    img = img_metas[0]['img'][0][cam_view].permute(1,2,0).cpu().numpy()
                 
                 cmap = plt.cm.get_cmap('hsv', 256)
                 cmap = np.array([cmap(i) for i in range(256)])[:, :3] * 255

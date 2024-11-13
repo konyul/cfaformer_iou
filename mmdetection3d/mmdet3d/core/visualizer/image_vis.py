@@ -78,10 +78,30 @@ def plot_rect3d_on_img(img,
                     (4, 5), (4, 7), (2, 6), (5, 6), (6, 7))
     for i in range(num_rects):
         corners = rect_corners[i].astype(np.int)
+        if np.any(corners >= 10000) or np.any(corners <= 0):
+            continue
+        def get_color(label_id):
+            colormap = {
+                0: (0, 140, 255),     # car: darkorange 
+                1: (0, 165, 255),     # truck: coral
+                2: (0, 180, 255),     # cv: orange
+                3: (0, 195, 255),     # bus: sandybrown
+                4: (0, 210, 255),     # trailer: peachpuff
+                5: (96, 164, 244),    # barrier: tan
+                6: (0, 0, 128),       # motorcycle: darkred
+                7: (0, 0, 255),       # bicycle: red
+                8: (255, 0, 0),       # pedestrian: blue
+                9: (0, 255, 255)      # traffic_cone: yellow
+            }
+            return colormap.get(int(label_id), (0, 255, 0))  # 기본값은 초록색
         for start, end in line_indices:
-            cv2.line(img, (corners[start, 0], corners[start, 1]),
-                     (corners[end, 0], corners[end, 1]), color, thickness,
-                     cv2.LINE_AA)
+            try:
+                # import pdb;pdb.set_trace()
+                cv2.line(img, (corners[start, 0], corners[start, 1]),
+                         (corners[end, 0], corners[end, 1]), get_color(color[i]), thickness,
+                         cv2.LINE_AA)
+            except:
+                import pdb;pdb.set_trace()
 
     return img.astype(np.uint8)
 

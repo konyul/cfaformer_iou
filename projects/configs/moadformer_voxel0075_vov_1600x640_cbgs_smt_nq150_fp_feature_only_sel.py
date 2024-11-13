@@ -88,6 +88,7 @@ test_pipeline = [
         use_dim=[0, 1, 2, 3, 4],
     ),
     dict(type='LoadMultiViewImageFromFiles'),
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -107,12 +108,11 @@ test_pipeline = [
                 type='DefaultFormatBundle3D',
                 class_names=class_names,
                 with_label=False),
-            dict(type='Collect3D', keys=['points', 'img'])
+            dict(type='Collect3D', keys=['points', 'img', 'gt_bboxes_3d'])
         ])
 ]
 data = dict(
-    #samples_per_gpu=4,
-    samples_per_gpu=2,
+    samples_per_gpu=4,
     workers_per_gpu=6,
     train=dict(
         type='CBGSDataset',
@@ -237,9 +237,8 @@ model = dict(
                     attn_cfgs=[
                         dict(
                             type='MultiheadAttention',
-                            # type='PETRMultiheadFlashAttention',
                             embed_dims=256,
-                            num_heads=8,
+                            num_heads=4,
                             dropout=0.1),
                     ],
                     ffn_cfgs=dict(
